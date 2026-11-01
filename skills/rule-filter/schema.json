@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "rule-filter",
+  "input": {
+    "type": "object",
+    "required": ["rules_file", "items"],
+    "properties": {
+      "rules_file": { "type": "string", "description": "YAML or JSON file with a top-level `rules` list" },
+      "items": { "type": "array", "items": { "type": "object" }, "description": "JSON array read from stdin" }
+    }
+  },
+  "rules_file": {
+    "type": "object",
+    "required": ["rules"],
+    "properties": {
+      "rules": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["name", "fields", "exclude"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "fields": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+            "exclude": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          }
+        }
+      }
+    }
+  },
+  "output": {
+    "type": "object",
+    "required": ["kept", "rejected"],
+    "additionalProperties": false,
+    "properties": {
+      "kept": { "type": "array", "items": { "type": "object" } },
+      "rejected": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["item", "rule", "matched"],
+          "additionalProperties": false,
+          "properties": {
+            "item": { "type": "object" },
+            "rule": { "type": "string", "description": "Name of the rule that matched" },
+            "matched": { "type": "string", "description": "The text that matched" }
+          }
+        }
+      }
+    }
+  }
+}

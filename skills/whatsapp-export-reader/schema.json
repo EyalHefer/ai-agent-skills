@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "whatsapp-export-reader",
+  "input": {
+    "type": "object",
+    "required": ["exports_dir"],
+    "properties": {
+      "exports_dir": { "type": "string", "description": "Folder containing .txt or .zip exports, searched recursively" },
+      "since": { "type": "string", "format": "date-time", "description": "Only return postings sent at or after this time" }
+    }
+  },
+  "output": {
+    "type": "array",
+    "items": {
+      "type": "object",
+      "required": ["key", "url", "title", "company", "text", "group", "sent_at"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "description": "Normalized URL, stable identity across groups and runs" },
+        "url": { "type": "string", "description": "The link as posted" },
+        "title": { "type": "string", "minLength": 1 },
+        "company": { "type": "string", "description": "Empty when the message does not name one" },
+        "text": { "type": "string", "description": "The message text describing this job" },
+        "group": { "type": "string", "description": "WhatsApp group name" },
+        "sent_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

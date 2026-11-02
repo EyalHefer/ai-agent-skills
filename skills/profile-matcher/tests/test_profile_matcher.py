@@ -80,6 +80,12 @@ def test_prompt_has_context_and_limits_field_size():
     assert "x" * (MAX_FIELD_CHARS + 1) not in prompt
 
 
+def test_field_size_limit_can_be_raised():
+    prompt = build_prompt("ctx", "ins", [{"title": "t", "text": "x" * 5000}], FIELDS, max_chars=4000)
+    assert "x" * 4000 in prompt
+    assert "x" * 4001 not in prompt
+
+
 def test_output_matches_schema():
     result = rank(items(2), "ctx", "ins", answer(score(0, 70)), FIELDS)
     schema = json.loads((SKILL / "schema.json").read_text(encoding="utf-8"))

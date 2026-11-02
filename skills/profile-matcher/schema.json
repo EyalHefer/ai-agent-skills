@@ -8,6 +8,7 @@
       "instructions": { "type": "string", "description": "File saying how to score" },
       "context": { "type": "array", "items": { "type": "string" }, "description": "Files with the profile, preferences and past ratings" },
       "fields": { "type": "string", "default": "title,company,text" },
+      "max_chars": { "type": "integer", "default": 1500, "description": "Each field is cut to this length" },
       "items": { "description": "JSON array from stdin, or a rule-filter result object" }
     }
   },

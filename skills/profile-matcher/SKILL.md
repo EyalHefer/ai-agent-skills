@@ -16,6 +16,7 @@ python scripts/profile_matcher.py --instructions scoring.md --context profile.md
 - `--instructions` says how to score. This is what makes the skill fit a specific agent.
 - `--context` adds what the model should know, such as the profile, preferences and past ratings. Repeatable.
 - `--fields` lists the item fields sent to the model (default `title,company,text`).
+- `--max-chars` cuts each field to this length (default 1500). Raise it when items carry full page text.
 
 Input is a JSON array, or the object written by `rule-filter`, in which case `kept` is used. Output is defined in [schema.json](schema.json). Progress goes to stderr.
 

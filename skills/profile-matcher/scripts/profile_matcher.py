@@ -76,9 +76,10 @@ def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-def build_prompt(context: str, instructions: str, batch: list[dict], fields: list[str]) -> str:
+def build_prompt(context: str, instructions: str, batch: list[dict], fields: list[str],
+                 max_chars: int = MAX_FIELD_CHARS) -> str:
     items = "\n\n".join(
-        f"## Item id={i}\n" + "\n".join(f"{f}: {str(item.get(f) or '')[:MAX_FIELD_CHARS]}" for f in fields)
+        f"## Item id={i}\n" + "\n".join(f"{f}: {str(item.get(f) or '')[:max_chars]}" for f in fields)
         for i, item in enumerate(batch)
     )
     return f"# About the person\n{context}\n\n# Scoring instructions\n{instructions}\n\n# Items\n{items}"
@@ -90,12 +91,12 @@ def parse_scores(raw: str, batch_size: int) -> dict[int, Score]:
 
 
 def rank(items: list[dict], context: str, instructions: str, generate: Callable[[str], str],
-         fields: list[str], batch_size: int = BATCH_SIZE) -> dict:
+         fields: list[str], batch_size: int = BATCH_SIZE, max_chars: int = MAX_FIELD_CHARS) -> dict:
     scored, unscored = [], []
     for start in range(0, len(items), batch_size):
         batch = items[start:start + batch_size]
         try:
-            scores = parse_scores(generate(build_prompt(context, instructions, batch, fields)), len(batch))
+            scores = parse_scores(generate(build_prompt(context, instructions, batch, fields, max_chars)), len(batch))
         except (ModelsBusy, ValueError) as e:
             log(f"batch failed: {type(e).__name__}")
             scores = {}
@@ -113,6 +114,7 @@ def main() -> None:
     parser.add_argument("--instructions", type=Path, required=True)
     parser.add_argument("--context", type=Path, action="append", default=[])
     parser.add_argument("--fields", default="title,company,text")
+    parser.add_argument("--max-chars", type=int, default=MAX_FIELD_CHARS, help="cut each field to this length")
     args = parser.parse_args()
 
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -124,7 +126,8 @@ def main() -> None:
     context = "\n\n".join(path.read_text(encoding="utf-8") for path in args.context)
     instructions = args.instructions.read_text(encoding="utf-8")
 
-    result = rank(items, context, instructions, Gemini(api_key), args.fields.split(","))
+    result = rank(items, context, instructions, Gemini(api_key), args.fields.split(","),
+                  max_chars=args.max_chars)
     sys.stdout.reconfigure(encoding="utf-8")
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2)
 

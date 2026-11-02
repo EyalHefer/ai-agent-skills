@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "job-page-reader",
+  "input": {
+    "type": "object",
+    "required": ["entries"],
+    "properties": {
+      "entries": { "description": "JSON array from stdin, or a rule-filter (kept) or profile-matcher (scored) result. The link is read from the entry or from its item." },
+      "limit": { "type": "integer", "default": 15, "description": "Read only the first N entries" },
+      "url_field": { "type": "string", "default": "url" }
+    }
+  },
+  "output": {
+    "type": "object",
+    "required": ["open", "closed", "unknown"],
+    "additionalProperties": false,
+    "$defs": {
+      "entry": {
+        "type": "object",
+        "description": "The input entry, unchanged, with a page field added",
+        "required": ["page"],
+        "properties": {
+          "page": {
+            "type": "object",
+            "required": ["status", "reason", "final_url", "text"],
+            "additionalProperties": false,
+            "properties": {
+              "status": { "enum": ["open", "closed", "unknown"] },
+              "reason": { "type": "string", "description": "Why the status was chosen" },
+              "final_url": { "type": ["string", "null"], "description": "Address after redirects, null if the page was not loaded" },
+              "text": { "type": "string", "description": "Visible page text, cut to 8000 characters" }
+            }
+          }
+        }
+      }
+    },
+    "properties": {
+      "open": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+      "closed": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+      "unknown": { "type": "array", "items": { "$ref": "#/$defs/entry" }, "description": "Not loaded, blocked, or too little text to decide" }
+    }
+  }
+}

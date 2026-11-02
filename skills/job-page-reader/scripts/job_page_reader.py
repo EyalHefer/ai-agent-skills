@@ -16,6 +16,7 @@ STABLE_MS = 2_000           # text unchanged this long means the page is done
 POLL_MS = 1_000
 PAUSE_SECONDS = 1.0         # between pages, to be polite to the sites
 USER_AGENT_NAME = "job-page-reader"
+SIGN_IN_REASON = "site asks to sign in"
 
 CLOSED_PHRASES = [
     "no longer available",
@@ -36,6 +37,21 @@ CLOSED_PHRASES = [
 ]
 
 
+# A site showing one of these wants a person, not a program. The page is not read, and the rest of
+# that site's pages are skipped for the run.
+SIGN_IN_WALL_PHRASES = [
+    "sign in to apply",
+    "log in to apply",
+    "sign in to continue",
+    "log in to continue",
+    "verify you are human",
+    "are you a robot",
+    "התחבר כדי להגיש",
+    "התחברו כדי להגיש",
+    "התחבר כדי להמשיך",
+]
+
+
 def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
@@ -45,6 +61,8 @@ def classify(url: str, final_url: str | None, http_status: int | None, text: str
     phrase = closed_phrase(text)
     if phrase:
         return "closed", f'page says "{phrase}"'
+    if sign_in_wall(text):
+        return "unknown", SIGN_IN_REASON
     if http_status in (404, 410):
         return "closed", f"HTTP {http_status}"
     if final_url and _redirected_to_parent(url, final_url):
@@ -59,6 +77,11 @@ def classify(url: str, final_url: str | None, http_status: int | None, text: str
 def closed_phrase(text: str) -> str | None:
     lowered = text.lower()
     return next((phrase for phrase in CLOSED_PHRASES if phrase in lowered), None)
+
+
+def sign_in_wall(text: str) -> bool:
+    lowered = text.lower()
+    return any(phrase in lowered for phrase in SIGN_IN_WALL_PHRASES)
 
 
 def _redirected_to_parent(url: str, final_url: str) -> bool:
@@ -82,6 +105,14 @@ def settled_text(read: Callable[[], str], wait: Callable[[int], None]) -> str:
         if (len(text) >= MIN_TEXT_CHARS and stable_for >= STABLE_MS) or closed_phrase(text):
             break
     return text
+
+
+def site_of(url: str) -> str:
+    """juniors.example.com and www.example.com are the same site."""
+    labels = urlsplit(url).netloc.lower().split(".")
+    # example.co.il: the site is three labels long
+    keep = 3 if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in ("co", "org", "ac", "gov", "net") else 2
+    return ".".join(labels[-keep:])
 
 
 def entries_from(data) -> list[dict]:
@@ -131,11 +162,14 @@ def read_pages(entries: list[dict], url_field: str, robots: Robots) -> dict:
         # Only the text matters, so skip heavy downloads.
         context.route("**/*", lambda route: route.abort()
                       if route.request.resource_type in ("image", "media", "font") else route.continue_())
+        walled_sites = set()
         for n, entry in enumerate(entries, 1):
             url = url_of(entry, url_field)
             page_info = {"final_url": None, "text": ""}
             if not url:
                 status, reason = "unknown", f'no "{url_field}" field'
+            elif site_of(url) in walled_sites:
+                status, reason = "unknown", f"{SIGN_IN_REASON} (earlier in this run)"
             elif not robots.allowed(url):
                 status, reason = "unknown", "robots.txt does not allow reading this page"
             else:
@@ -145,6 +179,9 @@ def read_pages(entries: list[dict], url_field: str, robots: Robots) -> dict:
                     text = settled_text(lambda: page.inner_text("body"), page.wait_for_timeout)
                     page_info = {"final_url": page.url, "text": text[:MAX_TEXT_CHARS]}
                     status, reason = classify(url, page.url, response.status if response else None, text)
+                    if reason == SIGN_IN_REASON:
+                        walled_sites.add(site_of(url))
+                        page_info["text"] = ""  # the wall, not the job
                 except PlaywrightError as e:
                     status, reason = "unknown", f"could not load page ({type(e).__name__})"
                 finally:

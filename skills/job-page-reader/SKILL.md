@@ -29,5 +29,6 @@ A page that fails to load, is blocked, or has almost no text is `unknown`, never
 
 - Pages are read one at a time, with a pause between them, and images and fonts are not downloaded.
 - `robots.txt` is respected. A page it disallows is returned as `unknown` without being opened.
+- A site that answers with a sign-in or "are you a robot" page wants a person, not a program. That page is `unknown`, and the rest of the site's pages are skipped for the run.
 - It reads pages only. It does not log in, fill forms or apply.
 - Keep `--limit` small. The skill is meant for a short list of top jobs, not for crawling a site.

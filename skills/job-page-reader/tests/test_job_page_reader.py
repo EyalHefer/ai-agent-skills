@@ -9,7 +9,7 @@ SKILL = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL / "scripts"))
 
 from job_page_reader import (SETTLE_MS, Robots, classify, entries_from, read_pages,  # noqa: E402
-                             settled_text, url_of)
+                             settled_text, site_of, url_of)
 
 JOB_TEXT = "Junior Automation Engineer. Requirements: B.Sc. in Computer Science, Python, Selenium. " * 5
 JOB_URL = "https://jobs.example.com/acme/123/junior-automation-engineer"
@@ -28,6 +28,26 @@ def test_closed_notice_wins_even_when_the_old_description_is_still_shown(notice)
     status, reason = classify(JOB_URL, JOB_URL, 200, notice + "\n" + JOB_TEXT)
     assert status == "closed"
     assert reason.startswith("page says")
+
+
+@pytest.mark.parametrize("wall", ["Sign in to apply for this job", "התחבר כדי להגיש מועמדות למשרה זו!"])
+def test_sign_in_wall_is_unknown_not_open(wall):
+    text = "Home | Jobs | " + wall + " Continue with Google. Free, just to filter out bots. " * 5
+    assert classify(JOB_URL, JOB_URL, 200, text) == ("unknown", "site asks to sign in")
+
+
+def test_sign_in_to_see_details_on_a_real_job_page_is_still_open():
+    assert classify(JOB_URL, JOB_URL, 200, "Sign in to see company details\n" + JOB_TEXT)[0] == "open"
+
+
+@pytest.mark.parametrize("url, site", [
+    ("https://juniors.example.com/job/1", "example.com"),
+    ("https://www.example.com/job/1", "example.com"),
+    ("https://jobs.acme.co.il/job/1", "acme.co.il"),
+    ("https://other.co.il/job/1", "other.co.il"),
+])
+def test_site_groups_subdomains(url, site):
+    assert site_of(url) == site
 
 
 def test_redirect_to_company_job_list_means_closed():

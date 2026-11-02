@@ -8,7 +8,8 @@ import pytest
 SKILL = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL / "scripts"))
 
-from job_page_reader import Robots, classify, entries_from, read_pages, url_of  # noqa: E402
+from job_page_reader import (SETTLE_MS, Robots, classify, entries_from, read_pages,  # noqa: E402
+                             settled_text, url_of)
 
 JOB_TEXT = "Junior Automation Engineer. Requirements: B.Sc. in Computer Science, Python, Selenium. " * 5
 JOB_URL = "https://jobs.example.com/acme/123/junior-automation-engineer"
@@ -49,6 +50,42 @@ def test_server_error_is_unknown_not_closed():
 
 def test_blank_page_is_unknown():
     assert classify(JOB_URL, JOB_URL, 200, "Loading...")[0] == "unknown"
+
+
+def reader(*texts):
+    """Returns the given texts one per read, then keeps returning the last one."""
+    reads = list(texts)
+    return lambda: reads.pop(0) if len(reads) > 1 else reads[0]
+
+
+def test_waits_until_the_job_has_loaded_below_the_menu():
+    menu = "Home | Jobs | Sign in"
+    waits = []
+    text = settled_text(reader(menu, menu, menu, menu + JOB_TEXT), waits.append)
+    assert JOB_TEXT in text
+
+
+def test_waits_while_the_text_is_still_growing():
+    parts = [JOB_TEXT[:n] for n in range(250, len(JOB_TEXT), 50)] + [JOB_TEXT]
+    assert settled_text(reader(*parts), lambda ms: None) == JOB_TEXT
+
+
+def test_stops_waiting_once_the_text_is_stable():
+    waits = []
+    assert settled_text(reader(JOB_TEXT), waits.append) == JOB_TEXT
+    assert sum(waits) <= 3000
+
+
+def test_short_closed_notice_does_not_wait_for_more_text():
+    waits = []
+    assert settled_text(reader("Loading", "This job is no longer available"), waits.append).endswith("available")
+    assert sum(waits) == 1000
+
+
+def test_gives_up_on_a_page_that_stays_blank():
+    waits = []
+    assert settled_text(reader("Loading"), waits.append) == "Loading"
+    assert sum(waits) == SETTLE_MS
 
 
 def test_accepts_array_and_results_of_other_skills():

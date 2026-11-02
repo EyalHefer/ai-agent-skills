@@ -4,13 +4,16 @@ import argparse
 import json
 import sys
 import time
+from typing import Callable
 from urllib.parse import urlsplit
 from urllib.robotparser import RobotFileParser
 
 MAX_TEXT_CHARS = 8000
 MIN_TEXT_CHARS = 200        # less than this is a blank or blocked page, not a job description
 PAGE_TIMEOUT_MS = 30_000
-SETTLE_MS = 8_000           # extra time for pages that load the job with JavaScript
+SETTLE_MS = 15_000          # most extra time for pages that load the job with JavaScript
+STABLE_MS = 2_000           # text unchanged this long means the page is done
+POLL_MS = 1_000
 PAUSE_SECONDS = 1.0         # between pages, to be polite to the sites
 USER_AGENT_NAME = "job-page-reader"
 
@@ -39,10 +42,9 @@ def log(message: str) -> None:
 
 def classify(url: str, final_url: str | None, http_status: int | None, text: str) -> tuple[str, str]:
     """Return (status, reason), where status is "open", "closed" or "unknown"."""
-    lowered = text.lower()
-    for phrase in CLOSED_PHRASES:
-        if phrase in lowered:
-            return "closed", f'page says "{phrase}"'
+    phrase = closed_phrase(text)
+    if phrase:
+        return "closed", f'page says "{phrase}"'
     if http_status in (404, 410):
         return "closed", f"HTTP {http_status}"
     if final_url and _redirected_to_parent(url, final_url):
@@ -54,11 +56,32 @@ def classify(url: str, final_url: str | None, http_status: int | None, text: str
     return "open", "job text found"
 
 
+def closed_phrase(text: str) -> str | None:
+    lowered = text.lower()
+    return next((phrase for phrase in CLOSED_PHRASES if phrase in lowered), None)
+
+
 def _redirected_to_parent(url: str, final_url: str) -> bool:
     """A job link that lands on its company's job list usually means the job was removed."""
     before, after = urlsplit(url), urlsplit(final_url)
     old, new = before.path.rstrip("/"), after.path.rstrip("/")
     return before.netloc == after.netloc and old != new and old.startswith(new + "/")
+
+
+def settled_text(read: Callable[[], str], wait: Callable[[int], None]) -> str:
+    """Pages that build the job with JavaScript show the site menu first and the job later, and
+    network activity is not a reliable sign that they are done. So read until the text stops growing."""
+    text = read()
+    waited = stable_for = 0
+    while waited < SETTLE_MS:
+        wait(POLL_MS)
+        waited += POLL_MS
+        latest = read()
+        stable_for = stable_for + POLL_MS if len(latest) == len(text) else 0
+        text = latest
+        if (len(text) >= MIN_TEXT_CHARS and stable_for >= STABLE_MS) or closed_phrase(text):
+            break
+    return text
 
 
 def entries_from(data) -> list[dict]:
@@ -99,7 +122,6 @@ class Robots:
 
 def read_pages(entries: list[dict], url_field: str, robots: Robots) -> dict:
     from playwright.sync_api import Error as PlaywrightError
-    from playwright.sync_api import TimeoutError as PlaywrightTimeout
     from playwright.sync_api import sync_playwright
 
     result = {"open": [], "closed": [], "unknown": []}
@@ -120,11 +142,7 @@ def read_pages(entries: list[dict], url_field: str, robots: Robots) -> dict:
                 page = context.new_page()
                 try:
                     response = page.goto(url, timeout=PAGE_TIMEOUT_MS, wait_until="domcontentloaded")
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=SETTLE_MS)
-                    except PlaywrightTimeout:
-                        pass  # some sites never go idle; read what has loaded
-                    text = page.inner_text("body")
+                    text = settled_text(lambda: page.inner_text("body"), page.wait_for_timeout)
                     page_info = {"final_url": page.url, "text": text[:MAX_TEXT_CHARS]}
                     status, reason = classify(url, page.url, response.status if response else None, text)
                 except PlaywrightError as e:

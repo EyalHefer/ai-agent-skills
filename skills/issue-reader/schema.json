@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "issue-reader",
+  "input": {
+    "type": "object",
+    "required": ["entries"],
+    "properties": {
+      "entries": { "description": "Issue links as arguments, or from stdin a JSON array, or a github-issue-lister (issues), rule-filter (kept) or profile-matcher (scored) result. The issue is found from url or key (owner/name#number), on the entry or its item." },
+      "limit": { "type": "integer", "default": 20, "description": "Read only the first N entries" },
+      "claim_days": { "type": "integer", "default": 30, "description": "A request to work on the issue older than this, with no PR, has lapsed" }
+    }
+  },
+  "output": {
+    "type": "object",
+    "required": ["available", "taken", "closed", "unknown"],
+    "additionalProperties": false,
+    "$defs": {
+      "entry": {
+        "type": "object",
+        "description": "The input entry, unchanged, with a thread field added",
+        "required": ["thread"],
+        "properties": {
+          "thread": {
+            "type": "object",
+            "required": ["status", "reason", "notes", "linked_prs", "claims", "comments",
+                         "last_maintainer_comment_at", "text"],
+            "additionalProperties": false,
+            "properties": {
+              "status": { "enum": ["available", "taken", "closed", "unknown"] },
+              "reason": { "type": "string", "description": "Why the status was chosen" },
+              "notes": { "type": "array", "items": { "type": "string" }, "description": "Facts that matter but did not decide the status, such as a lapsed claim" },
+              "linked_prs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["number", "url", "author", "state", "closes", "at"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "number": { "type": "integer" },
+                    "url": { "type": ["string", "null"] },
+                    "author": { "type": ["string", "null"] },
+                    "state": { "enum": ["open", "closed", "merged"] },
+                    "closes": { "type": "boolean", "description": "GitHub will close the issue when this PR is merged" },
+                    "at": { "type": ["string", "null"], "format": "date-time" }
+                  }
+                }
+              },
+              "claims": {
+                "type": "array",
+                "description": "Outside people who said they are doing it, and did not give it back",
+                "items": {
+                  "type": "object",
+                  "required": ["author", "at", "comment"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "author": { "type": "string" },
+                    "at": { "type": "string", "format": "date-time" },
+                    "comment": { "type": "string" }
+                  }
+                }
+              },
+              "comments": { "type": "integer" },
+              "last_maintainer_comment_at": { "type": ["string", "null"], "format": "date-time" },
+              "text": { "type": "string", "description": "Issue and human comments, oldest first, cut to 8000 characters" }
+            }
+          }
+        }
+      }
+    },
+    "properties": {
+      "available": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+      "taken": { "type": "array", "items": { "$ref": "#/$defs/entry" }, "description": "Assigned, an open PR will close it, or someone asked for it recently" },
+      "closed": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+      "unknown": { "type": "array", "items": { "$ref": "#/$defs/entry" }, "description": "Not read, or a merged PR should have closed it" }
+    }
+  }
+}

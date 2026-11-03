@@ -25,6 +25,7 @@ Skills are run as command-line programs that write JSON to stdout, so an agent i
 | [github-repo-finder](skills/github-repo-finder/SKILL.md) | Finds popular, active GitHub repositories with good first issues |
 | [repo-health-checker](skills/repo-health-checker/SKILL.md) | Measures how fast GitHub maintainers answer and merge outside contributions |
 | [github-issue-lister](skills/github-issue-lister/SKILL.md) | Lists open, unassigned newcomer issues from GitHub repositories |
+| [issue-reader](skills/issue-reader/SKILL.md) | Reads GitHub issue threads and sorts them into available, taken and closed |
 
 ## Development
 

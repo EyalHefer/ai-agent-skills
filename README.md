@@ -22,6 +22,7 @@ Skills are run as command-line programs that write JSON to stdout, so an agent i
 | [rule-filter](skills/rule-filter/SKILL.md) | Removes items from a JSON list using keyword rules |
 | [profile-matcher](skills/profile-matcher/SKILL.md) | Scores items against a profile with an LLM and ranks them |
 | [job-page-reader](skills/job-page-reader/SKILL.md) | Reads job links in a headless browser and sorts them into open and closed |
+| [github-repo-finder](skills/github-repo-finder/SKILL.md) | Finds popular, active GitHub repositories with good first issues |
 | [repo-health-checker](skills/repo-health-checker/SKILL.md) | Measures how fast GitHub maintainers answer and merge outside contributions |
 
 ## Development

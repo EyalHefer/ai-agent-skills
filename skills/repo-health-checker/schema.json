@@ -5,7 +5,7 @@
     "type": "object",
     "required": ["repos"],
     "properties": {
-      "repos": { "description": "owner/name arguments, or from stdin a JSON array of names or objects, or a rule-filter result (kept)" },
+      "repos": { "description": "owner/name arguments, or from stdin a JSON array of names or objects, or a github-repo-finder (repos) or rule-filter (kept) result" },
       "repo_field": { "type": "string", "default": "full_name", "description": "Field holding owner/name, read from the entry or from its item" },
       "days": { "type": "integer", "default": 90, "description": "Look at issues and PRs opened this many days back" },
       "min_age_days": { "type": "integer", "default": 7, "description": "Skip items younger than this" },

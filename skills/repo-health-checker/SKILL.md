@@ -14,7 +14,7 @@ python scripts/repo_health_checker.py owner/name [owner/name ...]
 python scripts/repo_health_checker.py < repos.json
 ```
 
-Input is repository names as arguments, or from stdin a JSON array of names or of objects with a `full_name` field (`--repo-field`), or the object written by `rule-filter` (`kept`). Each entry is returned unchanged, with a `health` field added, under `healthy`, `unhealthy`, `inactive` or `unknown`. Output is defined in [schema.json](schema.json). Progress goes to stderr.
+Input is repository names as arguments, or from stdin a JSON array of names or of objects with a `full_name` field (`--repo-field`), or the object written by `github-repo-finder` (`repos`) or `rule-filter` (`kept`). Each entry is returned unchanged, with a `health` field added, under `healthy`, `unhealthy`, `inactive` or `unknown`. Output is defined in [schema.json](schema.json). Progress goes to stderr.
 
 The token is taken from `GITHUB_TOKEN`, or from `gh auth token`.
 
@@ -28,7 +28,7 @@ The latest outside issues and PRs from the last 90 days (`--days`), up to 15 of 
 ## How a repository is judged
 
 - `inactive`: archived, no push for 60 days (`--inactive-days`), or no maintainer answered any item.
-- `unknown`: fewer than 5 outside items (`--min-sample`), or the repository could not be read.
+- `unknown`: fewer than 5 outside items (`--min-sample`), so busy that over 500 issues and PRs were opened in the last week (the sample would cost too many calls), or the repository could not be read.
 - `unhealthy`: median first answer over 5 days (`--max-response-days`), median merge over 21 days (`--max-merge-days`), or under 20% of at least 5 closed outside PRs merged (`--min-merge-rate`). A project that closes outside PRs quickly without merging them answers fast but does not take contributions.
 - `healthy`: everything else.
 

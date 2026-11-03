@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "github-repo-finder",
+  "input": {
+    "type": "object",
+    "required": ["language"],
+    "properties": {
+      "language": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "GitHub language names, one search each" },
+      "min_stars": { "type": "integer", "default": 1000 },
+      "max_stars": { "type": "integer" },
+      "pushed_days": { "type": "integer", "default": 30, "description": "Pushed to within this many days" },
+      "min_age_days": { "type": "integer", "default": 365, "description": "Created at least this many days ago" },
+      "min_issues": { "type": "integer", "default": 1, "description": "Open newcomer issues, at least" },
+      "help_wanted": { "type": "boolean", "default": false, "description": "Also search repos by their help wanted issues" },
+      "topic": { "type": "array", "items": { "type": "string" }, "description": "All must match" },
+      "sort": { "enum": ["updated", "stars", "good-first-issues", "help-wanted-issues"], "default": "updated" },
+      "per_language": { "type": "integer", "default": 20, "description": "Repositories per language and label" }
+    }
+  },
+  "output": {
+    "type": "object",
+    "required": ["repos", "totals", "stopped"],
+    "additionalProperties": false,
+    "properties": {
+      "repos": {
+        "type": "array",
+        "description": "Each repository once, in search order",
+        "items": {
+          "type": "object",
+          "required": ["full_name", "url", "description", "language", "searched_language", "stars", "forks",
+                       "open_issues", "topics", "license", "pushed_at", "created_at"],
+          "additionalProperties": false,
+          "properties": {
+            "full_name": { "type": "string", "description": "owner/name" },
+            "url": { "type": "string" },
+            "description": { "type": "string" },
+            "language": { "type": "string", "description": "Main language according to GitHub" },
+            "searched_language": { "type": "string", "description": "The search that found it first" },
+            "stars": { "type": "integer" },
+            "forks": { "type": "integer" },
+            "open_issues": { "type": "integer", "description": "Open issues and PRs" },
+            "topics": { "type": "array", "items": { "type": "string" } },
+            "license": { "type": ["string", "null"], "description": "SPDX id" },
+            "pushed_at": { "type": "string", "format": "date-time" },
+            "created_at": { "type": "string", "format": "date-time" }
+          }
+        }
+      },
+      "totals": { "type": "object", "additionalProperties": { "type": "integer" }, "description": "Matching repositories per search, before the limit" },
+      "stopped": { "type": ["string", "null"], "description": "Why the run ended early, null if it did not" }
+    }
+  }
+}

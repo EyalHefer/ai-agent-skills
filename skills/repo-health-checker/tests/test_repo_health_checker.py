@@ -230,6 +230,22 @@ def test_whole_run_matches_the_schema(no_downloads):
     assert missing["stars"] == 2000 and missing["health"]["reason"] == "repository not found"
 
 
+def test_repo_too_busy_to_sample_is_unknown(no_downloads):
+    name = "acme/huge"
+    fresh = [issue(n, 1) for n in range(100)]       # every page is younger than min_age_days
+    get = FakeGitHub({f"/repos/{name}/issues?": fresh, f"/repos/{name}": repo()})
+    [entry] = check_all([name], get, NOW, LIMITS)["unknown"]
+    assert entry["health"]["reason"].startswith("too busy to sample")
+
+
+def test_network_error_marks_only_that_repo_unknown(no_downloads):
+    get = FakeGitHub({"/repos/a/flaky": ConnectionResetError("Remote end closed connection"),
+                      **healthy_repo_routes("b/fine")})
+    result = check_all(["a/flaky", "b/fine"], get, NOW, LIMITS)
+    assert result["unknown"][0]["health"]["reason"].startswith("GitHub request failed")
+    assert result["healthy"][0]["full_name"] == "b/fine"
+
+
 def test_rate_limit_stops_the_run_but_keeps_every_repo(no_downloads):
     get = FakeGitHub({"/repos/": RateLimited("GitHub rate limit reached, resets at 13:00")})
     result = check_all(["a/one", "b/two"], get, NOW, LIMITS)
@@ -237,5 +253,9 @@ def test_rate_limit_stops_the_run_but_keeps_every_repo(no_downloads):
     assert len(get.calls) == 1
 
 
-def test_accepts_rule_filter_output():
-    assert entries_from({"kept": [{"full_name": "a/b"}], "rejected": []}) == [{"full_name": "a/b"}]
+@pytest.mark.parametrize("data", [
+    {"kept": [{"full_name": "a/b"}], "rejected": []},
+    {"repos": [{"full_name": "a/b"}], "totals": {}, "stopped": None},
+])
+def test_accepts_rule_filter_and_repo_finder_output(data):
+    assert entries_from(data) == [{"full_name": "a/b"}]

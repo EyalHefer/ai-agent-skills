@@ -20,6 +20,7 @@ MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 TRIAGE_EVENTS = {"labeled", "unlabeled", "assigned", "milestoned", "closed", "merged"}
 MAX_LIST_PAGES = 5
 PAUSE_SECONDS = 0.2         # between API calls, to be polite
+RETRY_SECONDS = 3
 GUIDE_FOLDERS = ["", ".github", "docs"]
 GUIDE_FILE = re.compile(r"^(contributing|ai[-_ ]?policy)", re.IGNORECASE)
 MIN_DECIDED_PRS = 5         # fewer closed outside PRs than this says nothing about the merge rate
@@ -35,6 +36,10 @@ class NotFound(Exception):
 
 
 class RateLimited(Exception):
+    pass
+
+
+class TooBusy(Exception):
     pass
 
 
@@ -189,6 +194,10 @@ def recent_outside_items(get: Get, name: str, now: datetime, limits: argparse.Na
         if (len(issues) >= limits.sample and len(prs) >= limits.sample) or len(batch) < 100 \
                 or parse_time(batch[-1]["created_at"]) < start:
             break
+    else:
+        if parse_time(batch[-1]["created_at"]) > end:
+            raise TooBusy(f"too busy to sample: over {MAX_LIST_PAGES * 100} issues and PRs "
+                          f"in the last {limits.min_age_days} days")
     return issues[:limits.sample], prs[:limits.sample]
 
 
@@ -231,18 +240,24 @@ def make_get(token: str | None) -> Get:
         headers["Authorization"] = f"Bearer {token}"
 
     def get(path: str):
-        time.sleep(PAUSE_SECONDS)
         request = urllib.request.Request(API + path, headers=headers)
-        try:
-            with urllib.request.urlopen(request, timeout=30) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                raise NotFound(path) from e
-            if e.code in (403, 429) and e.headers.get("x-ratelimit-remaining") == "0":
-                reset = int(e.headers.get("x-ratelimit-reset", "0"))
-                raise RateLimited(f"GitHub rate limit reached, resets at {datetime.fromtimestamp(reset):%H:%M}") from e
-            raise
+        for attempt in range(2):
+            time.sleep(PAUSE_SECONDS)
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    raise NotFound(path) from e
+                if e.code in (403, 429) and e.headers.get("x-ratelimit-remaining") == "0":
+                    reset = int(e.headers.get("x-ratelimit-reset", "0"))
+                    raise RateLimited(f"GitHub rate limit reached, resets at {datetime.fromtimestamp(reset):%H:%M}") from e
+                if e.code < 500 or attempt:
+                    raise
+            except OSError:      # dropped connection or timeout: try once more
+                if attempt:
+                    raise
+            time.sleep(RETRY_SECONDS)
     return get
 
 
@@ -255,11 +270,13 @@ def get_text(url: str) -> str:
 # ---- command line -------------------------------------------------------------------------------
 
 def entries_from(data) -> list:
-    """Accept a JSON array of repos, or the object written by rule-filter (kept)."""
+    """Accept a JSON array of repos, or the object written by github-repo-finder (repos) or
+    rule-filter (kept)."""
     if isinstance(data, dict):
-        if "kept" in data:
-            return data["kept"]
-        raise ValueError('expected a JSON array or an object with "kept"')
+        for key in ("repos", "kept"):
+            if key in data:
+                return data[key]
+        raise ValueError('expected a JSON array or an object with "repos" or "kept"')
     return data
 
 
@@ -283,10 +300,12 @@ def check_all(entries: list, get: Get, now: datetime, limits: argparse.Namespace
                 health = check_repo(get, name, now, limits)
             except NotFound:
                 health = {"status": "unknown", "reason": "repository not found"}
+            except TooBusy as e:
+                health = {"status": "unknown", "reason": str(e)}
             except RateLimited as e:
                 stop_reason = str(e)
                 health = {"status": "unknown", "reason": stop_reason}
-            except (urllib.error.URLError, TimeoutError) as e:
+            except OSError as e:     # network errors, including HTTP errors
                 health = {"status": "unknown", "reason": f"GitHub request failed ({e})"}
         base = {"full_name": entry} if isinstance(entry, str) else entry
         result[health["status"]].append({**base, "health": health})

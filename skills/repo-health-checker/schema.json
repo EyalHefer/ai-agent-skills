@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "repo-health-checker",
+  "input": {
+    "type": "object",
+    "required": ["repos"],
+    "properties": {
+      "repos": { "description": "owner/name arguments, or from stdin a JSON array of names or objects, or a rule-filter result (kept)" },
+      "repo_field": { "type": "string", "default": "full_name", "description": "Field holding owner/name, read from the entry or from its item" },
+      "days": { "type": "integer", "default": 90, "description": "Look at issues and PRs opened this many days back" },
+      "min_age_days": { "type": "integer", "default": 7, "description": "Skip items younger than this" },
+      "sample": { "type": "integer", "default": 15, "description": "Issues and PRs checked per repo, each" },
+      "min_sample": { "type": "integer", "default": 5 },
+      "max_response_days": { "type": "number", "default": 5 },
+      "max_merge_days": { "type": "number", "default": 21 },
+      "min_merge_rate": { "type": "number", "default": 0.2 },
+      "inactive_days": { "type": "integer", "default": 60 }
+    }
+  },
+  "output": {
+    "type": "object",
+    "required": ["healthy", "unhealthy", "inactive", "unknown"],
+    "additionalProperties": false,
+    "$defs": {
+      "entry": {
+        "type": "object",
+        "description": "The input entry, unchanged (a name becomes {full_name}), with a health field added",
+        "required": ["health"],
+        "properties": {
+          "health": {
+            "type": "object",
+            "required": ["status", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "status": { "enum": ["healthy", "unhealthy", "inactive", "unknown"] },
+              "reason": { "type": "string" },
+              "metrics": {
+                "type": "object",
+                "description": "Missing when the repo could not be read",
+                "required": ["stars", "pushed_at", "sample_issues", "sample_prs", "answered",
+                             "median_first_response_days", "merged_prs", "closed_unmerged_prs", "open_prs",
+                             "median_merge_days", "merge_rate"],
+                "additionalProperties": false,
+                "properties": {
+                  "stars": { "type": "integer" },
+                  "pushed_at": { "type": "string", "format": "date-time" },
+                  "sample_issues": { "type": "integer", "description": "Outside issues measured" },
+                  "sample_prs": { "type": "integer", "description": "Outside PRs measured" },
+                  "answered": { "type": "integer", "description": "How many of them a maintainer reacted to" },
+                  "median_first_response_days": { "type": ["number", "null"], "description": "Unanswered items count their age so far" },
+                  "merged_prs": { "type": "integer" },
+                  "closed_unmerged_prs": { "type": "integer" },
+                  "open_prs": { "type": "integer" },
+                  "median_merge_days": { "type": ["number", "null"] },
+                  "merge_rate": { "type": ["number", "null"], "description": "Merged share of closed outside PRs" }
+                }
+              },
+              "contributing": {
+                "type": "object",
+                "required": ["files", "cla", "ai_policy"],
+                "additionalProperties": false,
+                "properties": {
+                  "files": { "type": "array", "items": { "type": "string" }, "description": "Contributing guides and AI policies found" },
+                  "cla": { "type": "array", "items": { "type": "string" }, "description": "Lines mentioning a CLA, quoted, not judged" },
+                  "ai_policy": { "type": "array", "items": { "type": "string" }, "description": "Lines mentioning AI, quoted, not judged" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "properties": {
+      "healthy": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+      "unhealthy": { "type": "array", "items": { "$ref": "#/$defs/entry" }, "description": "Slow to answer or merge, or rarely merges outside PRs" },
+      "inactive": { "type": "array", "items": { "$ref": "#/$defs/entry" }, "description": "Archived, not pushed to lately, or nobody answers" },
+      "unknown": { "type": "array", "items": { "$ref": "#/$defs/entry" }, "description": "Too little activity to judge, not found, or not read" }
+    }
+  }
+}

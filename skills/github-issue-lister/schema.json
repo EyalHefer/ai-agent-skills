@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "github-issue-lister",
+  "input": {
+    "type": "object",
+    "required": ["repos"],
+    "properties": {
+      "repos": { "description": "owner/name arguments, or from stdin a repo-health-checker, github-repo-finder (repos) or rule-filter (kept) result, or a JSON array of names or objects with full_name" },
+      "include": { "type": "array", "items": { "enum": ["healthy", "unhealthy", "inactive", "unknown"] }, "default": ["healthy"], "description": "repo-health-checker statuses to use" },
+      "help_wanted": { "type": "boolean", "default": false, "description": "Also issues labeled help wanted" },
+      "label": { "type": "array", "items": { "type": "string" }, "description": "More label names to use, matched exactly" },
+      "per_repo": { "type": "integer", "default": 10, "description": "Newest issues kept per repository" },
+      "max_age_days": { "type": "integer", "default": 365 }
+    }
+  },
+  "output": {
+    "type": "object",
+    "required": ["issues", "repos"],
+    "additionalProperties": false,
+    "properties": {
+      "issues": {
+        "type": "array",
+        "description": "Open, unassigned issues, newest first within each repository",
+        "items": {
+          "type": "object",
+          "required": ["key", "url", "title", "repo", "repo_language", "repo_stars", "number", "labels",
+                       "newcomer_labels", "body", "comments", "author_association", "created_at", "updated_at"],
+          "additionalProperties": false,
+          "properties": {
+            "key": { "type": "string", "description": "owner/name#number, stable across runs" },
+            "url": { "type": "string" },
+            "title": { "type": "string" },
+            "repo": { "type": "string" },
+            "repo_language": { "type": ["string", "null"] },
+            "repo_stars": { "type": ["integer", "null"] },
+            "number": { "type": "integer" },
+            "labels": { "type": "array", "items": { "type": "string" }, "description": "All labels" },
+            "newcomer_labels": { "type": "array", "items": { "type": "string" }, "description": "The labels that marked it for newcomers" },
+            "body": { "type": "string", "description": "Without template comments, cut to 4000 characters" },
+            "comments": { "type": "integer" },
+            "author_association": { "type": ["string", "null"], "description": "MEMBER or OWNER means a maintainer asked for it" },
+            "created_at": { "type": "string", "format": "date-time" },
+            "updated_at": { "type": "string", "format": "date-time" }
+          }
+        }
+      },
+      "repos": {
+        "type": "array",
+        "description": "What happened in each repository",
+        "items": {
+          "type": "object",
+          "required": ["full_name", "labels", "issues", "error"],
+          "additionalProperties": false,
+          "properties": {
+            "full_name": { "type": "string" },
+            "labels": { "type": "array", "items": { "type": "string" }, "description": "Its labels taken as newcomer labels" },
+            "issues": { "type": "integer" },
+            "error": { "type": ["string", "null"] }
+          }
+        }
+      }
+    }
+  }
+}

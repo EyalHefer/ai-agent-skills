@@ -17,12 +17,17 @@
         "type": "array",
         "items": {
           "type": "object",
-          "required": ["name", "fields", "exclude"],
+          "required": ["name", "fields"],
           "additionalProperties": false,
+          "description": "Matches when any condition holds for any of the fields. A rule with no condition is ignored.",
           "properties": {
             "name": { "type": "string" },
             "fields": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
-            "exclude": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+            "exclude": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Whole words, any case, * for more letters" },
+            "above": { "type": "number", "description": "A number field greater than this" },
+            "below": { "type": "number", "description": "A number field less than this" },
+            "older_than_days": { "type": "number", "description": "An ISO date field more than this many days ago" },
+            "newer_than_days": { "type": "number", "description": "An ISO date field less than this many days ago" }
           }
         }
       }

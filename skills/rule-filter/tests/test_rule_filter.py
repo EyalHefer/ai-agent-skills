@@ -1,9 +1,11 @@
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import jsonschema
+import pytest
 
 SKILL = Path(__file__).resolve().parent.parent
 SCRIPT = SKILL / "scripts" / "rule_filter.py"
@@ -80,3 +82,56 @@ def test_cli_output_matches_schema_and_ignores_other_settings(tmp_path):
     schema = json.loads((SKILL / "schema.json").read_text(encoding="utf-8"))
     jsonschema.validate(output, schema["output"])
     assert output["kept"] == [{"title": "Junior מפתח"}]
+
+
+# ---- number and date rules ----
+
+NOW = datetime(2026, 11, 3, tzinfo=timezone.utc)
+
+
+def numbers_rule(**condition):
+    return build_rules({"rules": [{"name": "busy", "fields": ["comments"], **condition}]})
+
+
+def test_number_above():
+    items = [{"comments": 25}, {"comments": 20}, {"comments": "31"}, {}]
+    result = apply_rules(items, numbers_rule(above=20), NOW)
+    assert result["kept"] == [{"comments": 20}, {}]
+    assert [r["matched"] for r in result["rejected"]] == ["comments 25 > 20", "comments 31 > 20"]
+
+
+def test_number_below():
+    result = apply_rules([{"comments": 0}, {"comments": 3}], numbers_rule(below=1), NOW)
+    assert result["kept"] == [{"comments": 3}]
+
+
+def test_text_and_booleans_are_not_numbers():
+    assert apply_rules([{"comments": "many"}, {"comments": True}], numbers_rule(above=0), NOW)["rejected"] == []
+
+
+def test_dates():
+    rules = build_rules({"rules": [{"name": "stale", "fields": ["updated_at"], "older_than_days": 180}]})
+    items = [{"updated_at": "2026-01-01T00:00:00Z"}, {"updated_at": "2026-10-01T00:00:00Z"}, {"updated_at": "soon"}]
+    result = apply_rules(items, rules, NOW)
+    assert [r["item"] for r in result["rejected"]] == [items[0]]
+    assert result["rejected"][0]["matched"] == "updated_at 306 days ago, more than 180"
+
+
+def test_newer_than():
+    rules = build_rules({"rules": [{"name": "too new", "fields": ["created_at"], "newer_than_days": 7}]})
+    result = apply_rules([{"created_at": "2026-11-01"}, {"created_at": "2026-10-01"}], rules, NOW)
+    assert result["kept"] == [{"created_at": "2026-10-01"}]
+
+
+def test_rules_without_conditions_are_ignored_and_unknown_keys_fail():
+    assert build_rules({"rules": [{"name": "empty", "fields": ["title"], "exclude": []}]}) == []
+    with pytest.raises(ValueError, match="unknown keys"):
+        build_rules({"rules": [{"name": "typo", "fields": ["comments"], "more_than": 3}]})
+
+
+def test_rules_file_with_numbers_matches_the_schema():
+    config = {"rules": [{"name": "busy", "fields": ["comments"], "above": 20},
+                        {"name": "stale", "fields": ["updated_at"], "older_than_days": 180},
+                        {"name": "words", "fields": ["title"], "exclude": ["epic"]}]}
+    schema = json.loads((SKILL / "schema.json").read_text(encoding="utf-8"))["rules_file"]
+    jsonschema.validate(config, schema)

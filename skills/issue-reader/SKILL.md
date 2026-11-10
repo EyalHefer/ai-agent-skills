@@ -24,19 +24,22 @@ In this order:
 
 1. `closed` if it is closed.
 2. `taken` if it is assigned.
-3. `taken` if an open pull request will close it. GitHub records this when the PR says "Fixes #12" or is linked in the sidebar. A PR that only mentions the issue does not count, because large issues are often done in parts by many PRs, and those PRs are listed in `notes` instead.
-4. `taken` if someone outside the team asked for it ("I'd like to work on this", "Can I take this?", "/assign") in the last 30 days (`--claim-days`) and did not give it back. An older request with no PR has lapsed and is listed in `notes`.
-5. `unknown` if a merged PR should have closed it but the issue is still open: it may already be fixed.
-6. `available` otherwise.
+3. `taken` if an open pull request will close it. GitHub records this when the PR says "Fixes #12" or is linked in the sidebar.
+4. `taken` if an open pull request mentioned it in the last 30 days (`--claim-days`), even without "Fixes #12": many fixes are written that way. Not when 3 or more PRs mention the issue, since it is then being done in parts; those PRs are listed in `notes` instead.
+5. `taken` if someone pushed a commit that mentions it to their fork in the last 30 days: the work has started, even with no PR or comment yet.
+6. `taken` if someone outside the team asked for it ("I'd like to work on this", "Can I give this a try?", "I've started working on this", "I'll open a PR", "/assign") in the last 30 days and did not give it back. An older request with no PR has lapsed and is listed in `notes`.
+7. `unknown` if a merged PR should have closed it but the issue is still open: it may already be fixed.
+8. `available` otherwise. When 3 or more outside people asked for it or about it ("is this still open?", "any update?", lapsed claims too), a `crowded` note says to expect competition.
 
 ## What is added
 
 - `reason` for the status, and `notes`, such as lapsed claims or earlier PRs that were closed without merging.
-- `linked_prs` and `claims`, the evidence.
+- `linked_prs`, `claims` and `fork_commits`, the evidence.
+- `interested`: the outside people who asked for the issue or about it, other than its author.
 - `last_maintainer_comment_at`, to see whether anyone on the team is still around.
 - `text`: the issue and its comments by people, oldest first, cut to 8000 characters, for the next scoring step.
 
 ## Limits
 
 - Three or more requests per issue, so keep `--limit` small: it is meant for the best issues, not all of them.
-- Claims are recognized by common English phrases. A claim in other words, or in another language, is missed, and so is a claim made in a chat outside GitHub.
+- Claims and interest are recognized by common English phrases. A claim in other words, or in another language, is missed, and so is a claim made in a chat outside GitHub.

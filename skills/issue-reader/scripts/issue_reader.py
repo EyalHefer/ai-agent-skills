@@ -22,14 +22,29 @@ MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 ISSUE_URL = re.compile(r"github\.com/([^/]+/[^/]+)/issues/(\d+)")
 
 # Someone saying they are doing the issue, or asking for it.
+_DO = r"(work on|take|tackle|pick up|handle|fix|give (it|this) a (try|shot|go))"
 CLAIM = re.compile(
-    r"(\b(i'?d|i would|i'?d love to|i want to) (like to )?(work on|take|tackle|pick up|handle|fix)\b"
-    r"|\b(can|could|may) i (work on|take|tackle|pick up|handle|fix|be assigned)\b"
-    r"|\bi'?ll (work on|take|tackle|pick up|handle|fix)\b|\bi will (work on|take|tackle|pick up|handle|fix)\b"
+    rf"(\b(i'?d|i would|i'?d love to|i'?d be happy to|i want to) (like to )?{_DO}\b"
+    rf"|\b(can|could|may) i (please )?({_DO}|be assigned)\b"
+    rf"|\b(i'?ll|i will|let me) {_DO}\b"
     r"|\bi'?m (working on|taking|on) (this|it)\b|\bi am (working on|taking|on) (this|it)\b"
+    r"|\b(i'?ve|i have) (started|begun) (working on|on|looking into) (this|it|a fix)\b"
+    r"|\b(i'?m|i am) (currently )?working on (a|the) (fix|pr|pull request|patch)\b"
+    r"|\b(i'?ll|i will) (open|submit|raise|send|create|make) (a|the) (pr|pull request|patch)\b"
+    r"|\b(i'?m|i am) interested in (working on|taking|fixing|picking up) (this|it)\b"
     r"|\b(please )?assign (this |it |this issue )?to me\b|\bassign me\b"
-    r"|^\s*/(assign|take|claim)\b)",
+    r"|^\s*(i'?m )?on it\b|^\s*/(assign|take|claim)\b)",
     re.IGNORECASE | re.MULTILINE)
+# Someone asking about the issue without claiming it. With the claims, it shows how many people want it.
+INTEREST = re.compile(
+    r"\b(is (this|it) (issue )?still (open|available|up for grabs|needed|being worked on)"
+    r"|is (anyone|someone|somebody) (still )?working on"
+    r"|has (anyone|someone|somebody) (started|picked|taken)"
+    r"|any (updates?|progress|news)\b"
+    r"|(i'?m|i am) interested\b)",
+    re.IGNORECASE)
+CROWDED = 3                 # this many outside people asking about one issue: expect competition
+SPLIT_INTO_PARTS = 3        # this many PRs mentioning an issue: it is being done in parts
 # The same person giving it back.
 WITHDRAW = re.compile(
     r"\b(no longer (working|able)|not (working on|able to work on) (this|it) anymore|unassign me"
@@ -94,6 +109,37 @@ def linked_prs(timeline: list[dict], repo: str, closing: set[int]) -> list[dict]
     return list(prs.values())
 
 
+def fork_commits(timeline: list[dict], repo: str) -> list[dict]:
+    """Commits pushed to someone's fork that mention the issue: work has started, maybe with no PR yet.
+    Commits in the repository itself are left out: they are the team's, or a merged PR's."""
+    found = {}
+    for event in timeline:
+        if event.get("event") != "referenced" or is_bot(event.get("actor")):
+            continue
+        match = re.search(r"/repos/([^/]+/[^/]+)/commits/", event.get("commit_url") or "")
+        if not match or match.group(1).lower() == repo.lower():
+            continue
+        login = (event.get("actor") or {}).get("login")
+        found[login] = {"author": login, "fork": match.group(1), "at": event["created_at"]}
+    return list(found.values())
+
+
+def interested(timeline: list[dict], issue_author: str | None) -> list[str]:
+    """Outside people who asked for the issue or asked about it, lapsed claims included.
+    The issue's author and the team are left out."""
+    people = []
+    for event in timeline:
+        if event.get("event") != "commented" or is_bot(event.get("user")):
+            continue
+        login = event["user"]["login"]
+        if event.get("author_association") in MAINTAINERS or login == issue_author or login in people:
+            continue
+        body = event.get("body") or ""
+        if CLAIM.search(body) or INTEREST.search(body):
+            people.append(login)
+    return people
+
+
 def claims(timeline: list[dict]) -> list[dict]:
     """Comments by outside people saying they are doing the issue, unless they later gave it back."""
     found = {}
@@ -110,10 +156,14 @@ def claims(timeline: list[dict]) -> list[dict]:
     return list(found.values())
 
 
-def classify(issue: dict, prs: list[dict], claimed: list[dict], now: datetime,
-             claim_days: int) -> tuple[str, str, list[str]]:
+def classify(issue: dict, prs: list[dict], claimed: list[dict], now: datetime, claim_days: int,
+             forks: list[dict] = (), people: list[str] = ()) -> tuple[str, str, list[str]]:
     """Return (status, reason, notes). Notes are facts that matter but do not decide the status."""
     notes = []
+
+    def recent(at: str | None) -> bool:
+        return bool(at) and now - parse_time(at) <= timedelta(days=claim_days)
+
     if issue.get("state") == "closed":
         return "closed", "issue is closed", notes
     assignees = [a["login"] for a in issue.get("assignees") or []]
@@ -122,7 +172,19 @@ def classify(issue: dict, prs: list[dict], claimed: list[dict], now: datetime,
     open_prs = [pr for pr in prs if pr["state"] == "open" and pr["closes"]]
     if open_prs:
         return "taken", "open PR " + ", ".join(f"#{pr['number']} by {pr['author']}" for pr in open_prs), notes
-    fresh = [c for c in claimed if now - parse_time(c["at"]) <= timedelta(days=claim_days)]
+    # A fresh PR that only mentions the issue is usually its fix, written without "Fixes #12".
+    # Not when many PRs mention it: then the issue is being done in parts.
+    mentioning = [pr for pr in prs if pr["state"] == "open" and recent(pr["at"])]
+    if mentioning and len(prs) < SPLIT_INTO_PARTS:
+        pr = mentioning[-1]
+        days = (now - parse_time(pr["at"])).days
+        return "taken", f"open PR #{pr['number']} by {pr['author']} mentions it ({days} days ago)", notes
+    fresh_forks = [f for f in forks if recent(f["at"])]
+    if fresh_forks:
+        f = fresh_forks[-1]
+        days = (now - parse_time(f["at"])).days
+        return "taken", f"{f['author']} pushed a commit for it to {f['fork']} {days} days ago", notes
+    fresh = [c for c in claimed if recent(c["at"])]
     if fresh:
         c = fresh[-1]
         days = (now - parse_time(c["at"])).days
@@ -134,6 +196,9 @@ def classify(issue: dict, prs: list[dict], claimed: list[dict], now: datetime,
         pr = merged_closing[-1]
         return "unknown", f"PR #{pr['number']} was merged but the issue is still open; it may be fixed", notes
     notes += pr_notes(prs)
+    if len(people) >= CROWDED:
+        notes.append(f"crowded: {len(people)} people asked for it or about it ({', '.join(people[:5])}), "
+                     "so expect others to try too")
     return "available", "no assignee, open PR or recent claim", notes
 
 
@@ -206,10 +271,12 @@ def read_issue(get: Get, graphql: GraphQL, repo: str, number: int, now: datetime
         if len(batch) < 100:
             break
     prs, claimed = linked_prs(timeline, repo, closing_prs(graphql, repo, number)), claims(timeline)
-    status, reason, notes = classify(issue, prs, claimed, now, claim_days)
+    forks = fork_commits(timeline, repo)
+    people = interested(timeline, (issue.get("user") or {}).get("login"))
+    status, reason, notes = classify(issue, prs, claimed, now, claim_days, forks, people)
     return {
         "status": status, "reason": reason, "notes": notes,
-        "linked_prs": prs, "claims": claimed,
+        "linked_prs": prs, "claims": claimed, "fork_commits": forks, "interested": people,
         "comments": issue.get("comments", 0),
         "last_maintainer_comment_at": last_maintainer_comment(timeline),
         "text": thread_text(issue, timeline),
@@ -218,7 +285,7 @@ def read_issue(get: Get, graphql: GraphQL, repo: str, number: int, now: datetime
 
 def unread(status_reason: str) -> dict:
     return {"status": "unknown", "reason": status_reason, "notes": [], "linked_prs": [], "claims": [],
-            "comments": 0, "last_maintainer_comment_at": None, "text": ""}
+            "fork_commits": [], "interested": [], "comments": 0, "last_maintainer_comment_at": None, "text": ""}
 
 
 def read_all(entries: list[dict], get: Get, graphql: GraphQL, now: datetime, claim_days: int) -> dict:

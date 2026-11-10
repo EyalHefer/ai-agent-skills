@@ -22,7 +22,7 @@
         "properties": {
           "thread": {
             "type": "object",
-            "required": ["status", "reason", "notes", "linked_prs", "claims", "comments",
+            "required": ["status", "reason", "notes", "linked_prs", "claims", "fork_commits", "interested", "comments",
                          "last_maintainer_comment_at", "text"],
             "additionalProperties": false,
             "properties": {
@@ -59,6 +59,21 @@
                   }
                 }
               },
+              "fork_commits": {
+                "type": "array",
+                "description": "Commits pushed to someone's fork that mention the issue, latest per person",
+                "items": {
+                  "type": "object",
+                  "required": ["author", "fork", "at"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "author": { "type": ["string", "null"] },
+                    "fork": { "type": "string", "description": "owner/name of the fork" },
+                    "at": { "type": "string", "format": "date-time" }
+                  }
+                }
+              },
+              "interested": { "type": "array", "items": { "type": "string" }, "description": "Outside people who asked for the issue or about it, lapsed claims included, first asked first" },
               "comments": { "type": "integer" },
               "last_maintainer_comment_at": { "type": ["string", "null"], "format": "date-time" },
               "text": { "type": "string", "description": "Issue and human comments, oldest first, cut to 8000 characters" }
@@ -69,7 +84,7 @@
     },
     "properties": {
       "available": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
-      "taken": { "type": "array", "items": { "$ref": "#/$defs/entry" }, "description": "Assigned, an open PR will close it, or someone asked for it recently" },
+      "taken": { "type": "array", "items": { "$ref": "#/$defs/entry" }, "description": "Assigned, an open PR will close it or recently mentioned it, a recent commit in a fork mentions it, or someone asked for it recently" },
       "closed": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
       "unknown": { "type": "array", "items": { "$ref": "#/$defs/entry" }, "description": "Not read, or a merged PR should have closed it" }
     }

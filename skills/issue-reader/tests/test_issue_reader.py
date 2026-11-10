@@ -9,8 +9,8 @@ import pytest
 SKILL = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SKILL / "scripts"))
 
-from issue_reader import (CLAIM, NotFound, RateLimited, claims, classify, entries_from,  # noqa: E402
-                          linked_prs, locate, pr_notes, read_all, thread_text)
+from issue_reader import (CLAIM, INTEREST, NotFound, RateLimited, claims, classify, entries_from,  # noqa: E402
+                          fork_commits, interested, linked_prs, locate, pr_notes, read_all, thread_text)
 
 NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
 REPO = "acme/widgets"
@@ -37,8 +37,13 @@ def mention(number, state="open", merged=False, repo=REPO, author=BOB, days_ago=
     return {"event": "cross-referenced", "created_at": ago(days_ago), "source": {"type": "issue", "issue": source}}
 
 
-def pr(number, state="open", closes=True, author="bob"):
-    return {"number": number, "url": "", "author": author, "state": state, "closes": closes, "at": ago(3)}
+def pr(number, state="open", closes=True, author="bob", days_ago=3):
+    return {"number": number, "url": "", "author": author, "state": state, "closes": closes, "at": ago(days_ago)}
+
+
+def fork_commit(user, fork, days_ago=3):
+    return {"event": "referenced", "actor": user, "created_at": ago(days_ago), "commit_id": "abc",
+            "commit_url": f"https://api.github.com/repos/{fork}/commits/abc"}
 
 
 OPEN_ISSUE = {"state": "open", "assignees": []}
@@ -57,6 +62,14 @@ OPEN_ISSUE = {"state": "open", "assignees": []}
     "assign me please",
     "/assign",
     "May I be assigned?",
+    "I've started working on this.",
+    "I'm currently working on a fix",
+    "I'll open a PR tonight",
+    "Can I give this a try?",
+    "I'd be happy to fix this",
+    "Let me take this one",
+    "I'm interested in working on this",
+    "On it!",
 ])
 def test_claims_are_recognized(text):
     assert CLAIM.search(text)
@@ -67,6 +80,8 @@ def test_claims_are_recognized(text):
     "I think the work on this module is done elsewhere.",
     "Can you share the stack trace?",
     "I tried this and it fails on Windows too.",
+    "Let me know if you need more details.",
+    "I'll try to reproduce it on Linux and report back.",
 ])
 def test_ordinary_comments_are_not_claims(text):
     assert not CLAIM.search(text)
@@ -113,10 +128,57 @@ def test_open_pr_that_closes_it_is_taken_and_every_such_pr_is_named():
     assert (status, reason) == ("taken", "open PR #7 by you, #9 by bob")
 
 
-def test_open_pr_that_only_mentions_it_does_not_take_it():
-    status, _, notes = classify(OPEN_ISSUE, [pr(7, closes=False)], [], NOW, 30)
+def test_recent_open_pr_that_only_mentions_it_takes_it():
+    """Many PRs fix an issue without writing "Fixes #12"."""
+    status, reason, _ = classify(OPEN_ISSUE, [pr(7, closes=False)], [], NOW, 30)
+    assert (status, reason) == ("taken", "open PR #7 by bob mentions it (3 days ago)")
+
+
+def test_old_open_pr_that_only_mentions_it_does_not_take_it():
+    status, _, notes = classify(OPEN_ISSUE, [pr(7, closes=False, days_ago=60)], [], NOW, 30)
     assert status == "available"
     assert notes == ["open PRs that mention it but will not close it: #7"]
+
+
+def test_mentions_of_an_issue_done_in_parts_do_not_take_it():
+    prs = [pr(1, state="merged", closes=False), pr(2, state="merged", closes=False), pr(3, closes=False)]
+    assert classify(OPEN_ISSUE, prs, [], NOW, 30)[0] == "available"
+
+
+# ---- competition ----
+
+def test_commits_in_forks_are_found_and_the_repositorys_own_are_not():
+    timeline = [fork_commit(ALICE, "alice/widgets"), fork_commit(MAYA, REPO), fork_commit(BOT, "bot/widgets")]
+    assert fork_commits(timeline, REPO) == [{"author": "alice", "fork": "alice/widgets", "at": ago(3)}]
+
+
+def test_recent_fork_commit_takes_it_and_an_old_one_does_not():
+    recent = [{"author": "alice", "fork": "alice/widgets", "at": ago(5)}]
+    old = [{"author": "alice", "fork": "alice/widgets", "at": ago(70)}]
+    assert classify(OPEN_ISSUE, [], [], NOW, 30, forks=recent)[:2] == (
+        "taken", "alice pushed a commit for it to alice/widgets 5 days ago")
+    assert classify(OPEN_ISSUE, [], [], NOW, 30, forks=old)[0] == "available"
+
+
+@pytest.mark.parametrize("text", ["Is this still open?", "Is anyone working on this?", "Any update on this?",
+                                  "Has anyone started on it?", "I'm interested!"])
+def test_interest_is_recognized(text):
+    assert INTEREST.search(text)
+
+
+def test_interested_people_once_each_without_the_author_and_the_team():
+    carol, dan = {"login": "carol", "type": "User"}, {"login": "dan", "type": "User"}
+    timeline = [comment(ALICE, "Is this still open?", 40), comment(ALICE, "Any update?", 30),
+                comment(BOB, "Can I work on this?", 20), comment(carol, "Same bug here", 10),
+                comment(dan, "I'd like to take it", 5), comment(MAYA, "Is anyone working on this?", 4, "MEMBER")]
+    assert interested(timeline, issue_author="dan") == ["alice", "bob"]
+
+
+def test_crowded_issue_stays_available_with_a_note():
+    status, _, notes = classify(OPEN_ISSUE, [], [], NOW, 30, people=["a", "b", "c"])
+    assert status == "available"
+    assert notes == ["crowded: 3 people asked for it or about it (a, b, c), so expect others to try too"]
+    assert classify(OPEN_ISSUE, [], [], NOW, 30, people=["a", "b"])[2] == []
 
 
 def test_recent_claim_takes_it_and_an_old_one_has_lapsed():

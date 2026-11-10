@@ -14,6 +14,7 @@
       "max_response_days": { "type": "number", "default": 5 },
       "max_merge_days": { "type": "number", "default": 21 },
       "min_merge_rate": { "type": "number", "default": 0.2 },
+      "min_newcomer_merge_rate": { "type": "number", "default": 0.2, "description": "Judged only with 4 or more closed newcomer PRs" },
       "inactive_days": { "type": "integer", "default": 60 }
     }
   },
@@ -39,7 +40,9 @@
                 "description": "Missing when the repo could not be read",
                 "required": ["stars", "pushed_at", "sample_issues", "sample_prs", "answered",
                              "median_first_response_days", "merged_prs", "closed_unmerged_prs", "open_prs",
-                             "median_merge_days", "merge_rate"],
+                             "median_merge_days", "merge_rate", "newcomer_prs", "newcomer_merged_prs",
+                             "newcomer_closed_unmerged_prs", "newcomer_merge_rate",
+                             "newcomer_median_first_response_days"],
                 "additionalProperties": false,
                 "properties": {
                   "stars": { "type": "integer" },
@@ -52,7 +55,12 @@
                   "closed_unmerged_prs": { "type": "integer" },
                   "open_prs": { "type": "integer" },
                   "median_merge_days": { "type": ["number", "null"] },
-                  "merge_rate": { "type": ["number", "null"], "description": "Merged share of closed outside PRs" }
+                  "merge_rate": { "type": ["number", "null"], "description": "Merged share of closed outside PRs" },
+                  "newcomer_prs": { "type": "integer", "description": "Outside PRs whose author had nothing merged in the repository when opening them" },
+                  "newcomer_merged_prs": { "type": "integer" },
+                  "newcomer_closed_unmerged_prs": { "type": "integer" },
+                  "newcomer_merge_rate": { "type": ["number", "null"], "description": "Merged share of closed newcomer PRs" },
+                  "newcomer_median_first_response_days": { "type": ["number", "null"], "description": "Days until a maintainer first reacted to a newcomer PR (median)" }
                 }
               },
               "contributing": {

@@ -13,11 +13,12 @@ sys.path.insert(0, str(SKILL / "scripts"))
 import repo_health_checker as rhc  # noqa: E402
 from repo_health_checker import (NotFound, RateLimited, check_all, classify, entries_from,  # noqa: E402
                                  first_response, guide_paths, is_outside_contribution, merge_stats,
-                                 policy_notes, response_days)
+                                 policy_notes, response_days, was_newcomer)
 
 NOW = datetime(2026, 11, 3, 12, 0, tzinfo=timezone.utc)
 LIMITS = argparse.Namespace(days=90, min_age_days=7, sample=15, min_sample=5, max_response_days=5,
-                            max_merge_days=21, min_merge_rate=0.2, inactive_days=60, repo_field="full_name")
+                            max_merge_days=21, min_merge_rate=0.2, min_newcomer_merge_rate=0.2,
+                            inactive_days=60, repo_field="full_name")
 ALICE = {"login": "alice", "type": "User"}          # outside contributor
 MAINTAINER = {"login": "maya", "type": "User"}
 BOT = {"login": "helper[bot]", "type": "Bot"}
@@ -175,6 +176,104 @@ def test_policy_notes_quote_the_lines_instead_of_guessing():
     assert notes["ai_policy"] == ["PRs written by ChatGPT are closed.", "has an AI policy: .github/AI_POLICY.md"]
 
 
+@pytest.mark.parametrize("line", ["# Contributing to Acme Workplace AI", "Acme AI is a platform for teams."])
+def test_ai_in_a_product_name_is_not_a_policy(line):
+    assert policy_notes({"CONTRIBUTING.md": line})["ai_policy"] == []
+
+
+@pytest.mark.parametrize("line", [
+    "Do not submit AI-generated code.",
+    "If you use an LLM, disclose it in the PR description.",
+    "Pull requests written with ChatGPT will be closed.",
+])
+def test_ai_policy_lines(line):
+    assert policy_notes({"CONTRIBUTING.md": line})["ai_policy"] == [line]
+
+
+def test_frequent_authors_count_as_staff(no_downloads):
+    """Staff whose membership is hidden look like outside contributors."""
+    name = "acme/company"
+    staff = {"login": "staffer", "type": "User"}
+    items = [issue(n, 10 + n, user=staff, association="CONTRIBUTOR", pr=ago(9 + n), state="closed")
+             for n in range(1, 8)]
+    items += [issue(n, 10 + n % 20, user=person(n)) for n in range(21, 26)]
+    routes = {f"/repos/{name}/issues/{n}/timeline": [comment(9)] for n in list(range(1, 8)) + list(range(21, 26))}
+    routes.update({f"/repos/{name}/issues?": items, f"/repos/{name}": repo()})
+    [entry] = check_all([name], FakeGitHub(routes), NOW, LIMITS)["healthy"]
+    assert entry["health"]["metrics"]["sample_prs"] == 0
+    assert entry["health"]["metrics"]["sample_issues"] == 5
+
+
+# ---- first-time contributors ----
+
+@pytest.mark.parametrize("association", ["NONE", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER"])
+def test_authors_with_nothing_merged_even_now_were_newcomers(association):
+    get = FakeGitHub({})
+    assert was_newcomer(get, "acme/widgets", issue(association=association, pr=ago(3), state="closed"))
+    assert get.calls == []
+
+
+def test_merged_contributor_was_a_newcomer_only_without_earlier_commits():
+    """GitHub calls the author of a merged first PR a CONTRIBUTOR, as if they had been one all along."""
+    pr = issue(user=ALICE, association="CONTRIBUTOR", pr=ago(3), state="closed")
+    first = FakeGitHub({"/repos/acme/widgets/commits?author=alice": []})
+    returning = FakeGitHub({"/repos/acme/widgets/commits?author=alice": [{"sha": "abc"}]})
+    assert was_newcomer(first, "acme/widgets", pr) is True
+    assert "until=" in first.calls[0]
+    assert was_newcomer(returning, "acme/widgets", pr) is False
+
+
+def test_unmerged_contributor_pr_is_not_a_newcomers_and_costs_nothing():
+    get = FakeGitHub({})
+    assert not was_newcomer(get, "acme/widgets", issue(association="CONTRIBUTOR", pr=None, state="closed"))
+    assert get.calls == []
+
+
+def test_newcomer_numbers_in_a_whole_run(no_downloads):
+    name = "acme/widgets"
+    routes = healthy_repo_routes(name)
+    items = routes[f"/repos/{name}/issues?"]
+    items[5]["author_association"] = "CONTRIBUTOR"          # merged, with earlier commits: a regular
+    routes[f"/repos/{name}/commits?author=newcomer6"] = [{"sha": "abc"}]
+    [entry] = check_all([name], FakeGitHub(routes), NOW, LIMITS)["healthy"]
+    metrics = entry["health"]["metrics"]
+    assert (metrics["newcomer_prs"], metrics["newcomer_merged_prs"], metrics["newcomer_merge_rate"]) == (4, 4, 1.0)
+    assert entry["health"]["reason"].endswith(
+        "; first-time contributors: first answer in 1.0 days, 4 of 4 closed PRs merged")
+
+
+def test_repo_that_merges_regulars_but_not_newcomers_is_unhealthy():
+    metrics = {"sample_issues": 5, "sample_prs": 10, "answered": 15, "median_first_response_days": 1.0,
+               "median_merge_days": 2.0, "merged_prs": 6, "closed_unmerged_prs": 4, "merge_rate": 0.6,
+               "newcomer_merged_prs": 0, "newcomer_closed_unmerged_prs": 4, "newcomer_merge_rate": 0.0}
+    status, reason = classify(repo(), metrics, NOW, LIMITS)
+    assert (status, reason) == ("unhealthy", "merged only 0 of 4 closed PRs by first-time contributors")
+
+
+def test_repo_that_answers_regulars_fast_but_newcomers_slowly_is_unhealthy():
+    metrics = {"sample_issues": 5, "sample_prs": 10, "answered": 15, "median_first_response_days": 1.0,
+               "median_merge_days": 2.0, "merged_prs": 6, "closed_unmerged_prs": 4, "merge_rate": 0.6,
+               "newcomer_prs": 5, "newcomer_merged_prs": 2, "newcomer_closed_unmerged_prs": 2,
+               "newcomer_merge_rate": 0.5, "newcomer_median_first_response_days": 9.0}
+    assert classify(repo(), metrics, NOW, LIMITS) == (
+        "unhealthy", "first answer to first-time contributors' PRs takes 9.0 days (median)")
+
+
+def test_rejecting_everyone_is_said_once():
+    metrics = {"sample_issues": 5, "sample_prs": 10, "answered": 15, "median_first_response_days": 1.0,
+               "median_merge_days": None, "merged_prs": 0, "closed_unmerged_prs": 10, "merge_rate": 0.0,
+               "newcomer_prs": 10, "newcomer_merged_prs": 0, "newcomer_closed_unmerged_prs": 10,
+               "newcomer_merge_rate": 0.0, "newcomer_median_first_response_days": 1.0}
+    assert classify(repo(), metrics, NOW, LIMITS) == ("unhealthy", "merged only 0 of 10 closed outside PRs")
+
+
+def test_too_few_newcomer_prs_are_not_judged():
+    metrics = {"sample_issues": 5, "sample_prs": 10, "answered": 15, "median_first_response_days": 1.0,
+               "median_merge_days": 2.0, "merged_prs": 6, "closed_unmerged_prs": 4, "merge_rate": 0.6,
+               "newcomer_merged_prs": 0, "newcomer_closed_unmerged_prs": 3, "newcomer_merge_rate": 0.0}
+    assert classify(repo(), metrics, NOW, LIMITS)[0] == "healthy"
+
+
 def test_words_containing_ai_are_not_an_ai_policy():
     assert policy_notes({"CONTRIBUTING.md": "Please explain the main change and maintain the style."})["ai_policy"] == []
 
@@ -196,9 +295,13 @@ class FakeGitHub:
         raise NotFound(path)
 
 
+def person(n):
+    return {"login": f"newcomer{n}", "type": "User"}
+
+
 def healthy_repo_routes(name="acme/widgets"):
-    issues = [issue(n, 10 + n) for n in range(1, 6)]
-    prs = [issue(n, 10 + n, pr=ago(8 + n), state="closed") for n in range(6, 11)]
+    issues = [issue(n, 10 + n, user=person(n)) for n in range(1, 6)]
+    prs = [issue(n, 10 + n, user=person(n), pr=ago(8 + n), state="closed") for n in range(6, 11)]
     routes = {f"/repos/{name}/issues/{n}/timeline": [comment(9 + n)] for n in range(1, 11)}
     routes.update({
         f"/repos/{name}/issues?": issues + prs + [issue(99, 2)],     # 99 is too young to judge

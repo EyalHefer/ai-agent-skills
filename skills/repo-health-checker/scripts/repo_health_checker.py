@@ -10,7 +10,9 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -24,7 +26,17 @@ RETRY_SECONDS = 3
 GUIDE_FOLDERS = ["", ".github", "docs"]
 GUIDE_FILE = re.compile(r"^(contributing|ai[-_ ]?policy)", re.IGNORECASE)
 MIN_DECIDED_PRS = 5         # fewer closed outside PRs than this says nothing about the merge rate
-AI_POLICY = re.compile(r"\b(AI|LLMs?|ChatGPT|Copilot|Claude|generative|AI-generated|machine-generated)\b")
+MIN_NEWCOMER_PRS = 4        # the same for PRs by first-time contributors, who are fewer
+# GitHub gives the author's association as it is now, not when the PR was opened. These authors have
+# no merged work in the repository even now, so they were newcomers then too. A CONTRIBUTOR may have
+# become one with this very PR, which is checked from the commit history.
+NEWCOMER_ASSOCIATIONS = {"FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE"}
+AI_WORD = re.compile(r"\b(AI|LLMs?|ChatGPT|Copilot|Claude|generative|AI-generated|machine-generated)\b")
+# A line about AI is a policy only when it talks about how contributions are made.
+# "Contributing to Acme AI" is a product name.
+POLICY_WORD = re.compile(r"(generat|assist|tool|polic|disclos|writ|use of|using|allowed|prohibit|\bban)",
+                         re.IGNORECASE)
+FREQUENT_AUTHOR_ITEMS = 5   # someone who opened this many items in the window is treated as staff
 CLA = re.compile(r"\b(CLA|Contributor License Agreement)\b", re.IGNORECASE)
 MAX_POLICY_LINES = 5
 
@@ -113,6 +125,33 @@ def merge_stats(prs: list[dict]) -> dict:
     }
 
 
+def was_newcomer(get: Get, name: str, pr: dict) -> bool:
+    """Whether the PR's author had nothing merged in the repository when they opened it.
+    A merged PR by a CONTRIBUTOR costs one request: their commits from before the PR. Other PRs by a
+    CONTRIBUTOR are counted as not a newcomer's, since their merged work most likely came first."""
+    association = pr.get("author_association")
+    if association in NEWCOMER_ASSOCIATIONS:
+        return True
+    if association != "CONTRIBUTOR" or not (pr.get("pull_request") or {}).get("merged_at"):
+        return False
+    login = (pr.get("user") or {}).get("login")
+    query = urllib.parse.urlencode({"author": login, "until": pr["created_at"], "per_page": 1})
+    return not get(f"/repos/{name}/commits?{query}")
+
+
+def newcomer_stats(prs: list[dict], waits: list[tuple[float, bool]]) -> dict:
+    """The PR numbers again, for first-time contributors only. They are the ones a newcomer will be
+    treated like; regular outside contributors are often answered faster."""
+    stats = merge_stats(prs)
+    return {
+        "newcomer_prs": len(prs),
+        "newcomer_merged_prs": stats["merged_prs"],
+        "newcomer_closed_unmerged_prs": stats["closed_unmerged_prs"],
+        "newcomer_merge_rate": stats["merge_rate"],
+        "newcomer_median_first_response_days": median([days for days, _ in waits]),
+    }
+
+
 def median(values: list[float]) -> float | None:
     return round(statistics.median(values), 1) if values else None
 
@@ -135,14 +174,42 @@ def classify(repo: dict, metrics: dict, now: datetime, limits: argparse.Namespac
     decided = metrics["merged_prs"] + metrics["closed_unmerged_prs"]
     if decided >= MIN_DECIDED_PRS and metrics["merge_rate"] < limits.min_merge_rate:
         problems.append(f"merged only {metrics['merged_prs']} of {decided} closed outside PRs")
+    elif newcomers_rejected(metrics, limits.min_newcomer_merge_rate):     # already said, if all were rejected
+        problems.append(f"merged only {metrics['newcomer_merged_prs']} of {newcomer_decided(metrics)} closed PRs "
+                        "by first-time contributors")
     if response > limits.max_response_days:
         problems.append(f"first answer takes {response} days (median)")
+    elif newcomers_wait(metrics, limits.max_response_days):
+        problems.append(f"first answer to first-time contributors' PRs takes "
+                        f"{metrics['newcomer_median_first_response_days']} days (median)")
     if merge is not None and merge > limits.max_merge_days:
         problems.append(f"merging takes {merge} days (median)")
     if problems:
         return "unhealthy", "; ".join(problems)
     merge_text = f", merge in {merge} days" if merge is not None else ", no merged outside PRs to measure"
-    return "healthy", f"first answer in {response} days{merge_text} (medians)"
+    return "healthy", f"first answer in {response} days{merge_text} (medians){newcomer_text(metrics)}"
+
+
+def newcomer_decided(metrics: dict) -> int:
+    return metrics.get("newcomer_merged_prs", 0) + metrics.get("newcomer_closed_unmerged_prs", 0)
+
+
+def newcomers_rejected(metrics: dict, min_rate: float) -> bool:
+    return newcomer_decided(metrics) >= MIN_NEWCOMER_PRS and metrics["newcomer_merge_rate"] < min_rate
+
+
+def newcomers_wait(metrics: dict, max_days: float) -> bool:
+    days = metrics.get("newcomer_median_first_response_days")
+    return metrics.get("newcomer_prs", 0) >= MIN_NEWCOMER_PRS and days is not None and days > max_days
+
+
+def newcomer_text(metrics: dict) -> str:
+    parts = []
+    if metrics.get("newcomer_prs", 0) >= MIN_NEWCOMER_PRS:
+        parts.append(f"first answer in {metrics['newcomer_median_first_response_days']} days")
+    if newcomer_decided(metrics):
+        parts.append(f"{metrics['newcomer_merged_prs']} of {newcomer_decided(metrics)} closed PRs merged")
+    return f"; first-time contributors: {', '.join(parts)}" if parts else ""
 
 
 # ---- contributing guide -------------------------------------------------------------------------
@@ -162,8 +229,14 @@ def policy_notes(texts: dict[str, str]) -> dict:
         if re.match(r"ai[-_ ]?policy", path.rsplit("/", 1)[-1], re.IGNORECASE):
             lines.append(f"has an AI policy: {path}")
         else:
-            lines += [line.strip() for line in text.splitlines() if AI_POLICY.search(line)]
+            lines += [line.strip() for line in text.splitlines() if is_ai_policy_line(line)]
     return {"files": list(texts), "cla": cla[:MAX_POLICY_LINES], "ai_policy": lines[:MAX_POLICY_LINES]}
+
+
+def is_ai_policy_line(line: str) -> bool:
+    """Headings are skipped: "# Contributing to Acme AI" names a product, not a rule."""
+    line = line.strip()
+    return not line.startswith("#") and bool(AI_WORD.search(line)) and bool(POLICY_WORD.search(line))
 
 
 def contributing_guide(get: Get, name: str) -> dict:
@@ -182,17 +255,16 @@ def contributing_guide(get: Get, name: str) -> dict:
 
 def recent_outside_items(get: Get, name: str, now: datetime, limits: argparse.Namespace) -> tuple[list, list]:
     """Outside issues and PRs opened in the window. Items younger than min_age_days are skipped,
-    because they have not had a fair chance to be answered yet."""
+    because they have not had a fair chance to be answered yet. Frequent authors are skipped too:
+    see frequent_authors."""
     start, end = now - timedelta(days=limits.days), now - timedelta(days=limits.min_age_days)
-    issues, prs = [], []
+    fetched = []
     for page in range(1, MAX_LIST_PAGES + 1):
         batch = get(f"/repos/{name}/issues?state=all&sort=created&direction=desc&per_page=100&page={page}")
-        for item in batch:
-            created = parse_time(item["created_at"])
-            if start <= created <= end and is_outside_contribution(item):
-                (prs if "pull_request" in item else issues).append(item)
-        if (len(issues) >= limits.sample and len(prs) >= limits.sample) or len(batch) < 100 \
-                or parse_time(batch[-1]["created_at"]) < start:
+        fetched += [item for item in batch if parse_time(item["created_at"]) >= start]
+        issues, prs = split_outside(fetched, end)
+        enough = len(issues) >= limits.sample and len(prs) >= limits.sample
+        if enough or len(batch) < 100 or parse_time(batch[-1]["created_at"]) < start:
             break
     else:
         if parse_time(batch[-1]["created_at"]) > end:
@@ -201,11 +273,31 @@ def recent_outside_items(get: Get, name: str, now: datetime, limits: argparse.Na
     return issues[:limits.sample], prs[:limits.sample]
 
 
+def frequent_authors(items: list[dict]) -> set[str]:
+    """People who opened many of the items. Company projects often hide their staff's membership,
+    so staff appear as outside contributors and their PRs, merged by colleagues within hours, make
+    the project look fast. Whoever opens this many items is treated as part of the team."""
+    counts = Counter((item.get("user") or {}).get("login") for item in items)
+    return {login for login, count in counts.items() if login and count >= FREQUENT_AUTHOR_ITEMS}
+
+
+def split_outside(items: list[dict], end: datetime) -> tuple[list, list]:
+    team = frequent_authors(items)
+    issues, prs = [], []
+    for item in items:
+        author = (item.get("user") or {}).get("login")
+        if parse_time(item["created_at"]) <= end and is_outside_contribution(item) and author not in team:
+            (prs if "pull_request" in item else issues).append(item)
+    return issues, prs
+
+
 def check_repo(get: Get, name: str, now: datetime, limits: argparse.Namespace) -> dict:
     repo = get(f"/repos/{name}")
     issues, prs = recent_outside_items(get, name, now, limits)
     waits = [response_days(item, get(f"/repos/{name}/issues/{item['number']}/timeline?per_page=100"), now)
              for item in issues + prs]
+    newcomer = [n for n, pr in enumerate(prs) if was_newcomer(get, name, pr)]
+    pr_waits = waits[len(issues):]
     metrics = {
         "stars": repo["stargazers_count"],
         "pushed_at": repo["pushed_at"],
@@ -214,6 +306,7 @@ def check_repo(get: Get, name: str, now: datetime, limits: argparse.Namespace) -
         "answered": sum(1 for _, answered in waits if answered),
         "median_first_response_days": median([days for days, _ in waits]),
         **merge_stats(prs),
+        **newcomer_stats([prs[n] for n in newcomer], [pr_waits[n] for n in newcomer]),
     }
     status, reason = classify(repo, metrics, now, limits)
     return {"status": status, "reason": reason, "metrics": metrics,
@@ -325,6 +418,8 @@ def main() -> None:
     parser.add_argument("--max-merge-days", type=float, default=21)
     parser.add_argument("--min-merge-rate", type=float, default=0.2,
                         help="share of closed outside PRs that were merged")
+    parser.add_argument("--min-newcomer-merge-rate", type=float, default=0.2,
+                        help="share of closed PRs by first-time contributors that were merged")
     parser.add_argument("--inactive-days", type=int, default=60, help="no push for longer is inactive")
     args = parser.parse_args()
 

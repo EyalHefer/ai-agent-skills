@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dev-setup-checker",
+  "input": {
+    "type": "object",
+    "required": ["repos"],
+    "properties": {
+      "repos": { "description": "owner/name arguments, or from stdin a JSON array of names or objects with full_name, or a github-repo-finder (repos), repo-health-checker (healthy) or rule-filter (kept) result" },
+      "repo_field": { "type": "string", "default": "full_name" },
+      "max_setup_commands": { "type": "integer", "default": 15, "description": "More commands than this in the setup instructions is a difficulty" },
+      "max_ci_minutes": { "type": "number", "default": 30, "description": "CI slower than this is a difficulty, twice as slow a bigger one" },
+      "max_size_mb": { "type": "number", "default": 1024, "description": "A bigger repository is slow to clone" }
+    }
+  },
+  "output": {
+    "type": "object",
+    "required": ["easy", "moderate", "hard", "unknown"],
+    "additionalProperties": false,
+    "$defs": {
+      "entry": {
+        "type": "object",
+        "description": "The input entry, unchanged (a name becomes {full_name}), with a setup field added",
+        "required": ["setup"],
+        "properties": {
+          "setup": {
+            "type": "object",
+            "required": ["rating", "reasons"],
+            "additionalProperties": false,
+            "properties": {
+              "rating": { "enum": ["easy", "moderate", "hard", "unknown"] },
+              "reasons": { "type": "array", "items": { "type": "string" }, "description": "What made it easier or harder, or why it could not be read" },
+              "facts": {
+                "type": "object",
+                "description": "Missing when the repository could not be read",
+                "required": ["default_branch", "size_mb", "files_listed", "tree_truncated", "devcontainer", "gitpod",
+                             "docker", "nix", "gpu", "build_tools", "ecosystems", "docs_read", "setup_doc",
+                             "setup_commands", "setup_excerpt", "ci_median_minutes", "ci_commits"],
+                "additionalProperties": false,
+                "properties": {
+                  "default_branch": { "type": "string" },
+                  "size_mb": { "type": "number" },
+                  "files_listed": { "type": "integer" },
+                  "tree_truncated": { "type": "boolean", "description": "GitHub listed only part of a very large repository" },
+                  "devcontainer": { "type": "boolean" },
+                  "gitpod": { "type": "boolean" },
+                  "docker": { "type": "boolean", "description": "A Dockerfile or compose file in the root" },
+                  "nix": { "type": "boolean" },
+                  "gpu": { "type": "boolean", "description": "Has CUDA source files" },
+                  "build_tools": { "type": "array", "items": { "type": "string" }, "description": "Named by files in the root, such as Gradle (wrapper included), uv, CMake" },
+                  "ecosystems": { "type": "array", "items": { "type": "string" }, "description": "Toolchains to install, from build files no deeper than one folder, outside examples, tests, docs and vendored code" },
+                  "docs_read": { "type": "array", "items": { "type": "string" } },
+                  "setup_doc": { "type": ["string", "null"], "description": "The document the setup instructions came from" },
+                  "setup_commands": { "type": "integer", "description": "Command lines in the setup, build and test sections" },
+                  "setup_excerpt": { "type": "string", "description": "Those sections, cut to 1500 characters, for a person or a model to read" },
+                  "ci_median_minutes": { "type": ["number", "null"], "description": "Until the slowest workflow of a PR commit finished, median" },
+                  "ci_commits": { "type": "integer", "description": "PR commits the CI time was measured on" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "properties": {
+      "easy": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+      "moderate": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+      "hard": { "type": "array", "items": { "$ref": "#/$defs/entry" } },
+      "unknown": { "type": "array", "items": { "$ref": "#/$defs/entry" }, "description": "Not found, or GitHub could not be read" }
+    }
+  }
+}

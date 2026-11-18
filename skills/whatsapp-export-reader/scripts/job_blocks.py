@@ -23,6 +23,8 @@ _NOISE_URL = re.compile(
   | linkedin\.com/(feed|posts|in)/
   | chat\.whatsapp\.com
   | airtable\.com
+  | setmore\.com                    # interview-coaching ads under referally posts
+  | referally\.link                 # referally community and paywall links
     """,
     re.VERBOSE | re.IGNORECASE,
 )
@@ -60,10 +62,10 @@ def extract_postings(text: str, group: str, sent_at: datetime) -> list[Posting]:
     block_start = 0
     for match in _URL.finditer(text):
         url = match.group().rstrip(".,)")
+        block = text[block_start:match.start()]
+        block_start = match.end()   # an ad's text must not leak into the next job's block
         if _NOISE_URL.search(url):
             continue
-        block = text[block_start:match.start()]
-        block_start = match.end()
         title, company = _guess_title_company(block, url)
         if title:
             postings.append(Posting(normalize_url(url), url, title, company, _clean(block), group, sent_at))
@@ -82,10 +84,10 @@ def _guess_title_company(block: str, url: str) -> tuple[str, str]:
         bold = _BOLD.findall(block)
         if bold:
             title = bold[0]
-            # Secret Hunter digest style: "*Title* - Company"
-            after = block.split(f"*{title}*", 1)[1].splitlines()[0]
-            if after.strip().startswith("-"):
-                company = after.strip(" -")
+            # "*Title* - Company" (Secret Hunter digests) or "*Title* / Company" (referally)
+            after = block.split(f"*{title}*", 1)[1].splitlines()[0].strip()
+            if after[:1] in ("-", "/"):
+                company = after.strip(" -/")
             # Secret Hunter post style: company on the line after the title
             elif "secrethunter" in url and len(lines) > 1 and lines[0].startswith("*"):
                 company = lines[1]

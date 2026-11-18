@@ -117,3 +117,49 @@ def test_job_blocks_work_on_plain_text_without_an_export():
     [posting] = extract_postings(text, group="telegram-inbox", sent_at=datetime(2026, 11, 18, 9, 0))
     assert (posting.title, posting.key, posting.group) == (
         "Junior Data Analyst", "https://umbrella.example/jobs/7", "telegram-inbox")
+
+
+# The "*Title* / Company" style, with a coaching ad and community links after the job. Invented data.
+SLASH_STYLE = (
+    "*Junior Backend Engineer* / Hooli\n\n"
+    "_Tel Aviv_ | _Software_\n\n"
+    "- B.Sc. in Computer Science\n\n"
+    "https://hooli.example/careers/42\n\n"
+    "*Book a 1:1 prep session with Dana* ✅\n"
+    "Engineering Manager (15+ yrs) >>\n"
+    "https://coach.setmore.com/dana\n\n"
+    "Join our community: https://referally.link/#groups\n"
+)
+
+# A job whose link is behind a paywall: there is nothing to read, so it yields no posting.
+PAYWALLED = (
+    "*Research Engineer* / ●●●●●●\n\n"
+    "_Haifa_ | _Research_\n\n"
+    "Unlock the full job 🦾\nhttps://referally.link/#join\n"
+)
+
+
+def _postings(text):
+    from job_blocks import extract_postings
+
+    return extract_postings(text, group="telegram-inbox", sent_at=datetime(2026, 11, 18, 9, 0))
+
+
+def test_slash_style_gives_company_and_skips_the_coaching_ad():
+    [posting] = _postings(SLASH_STYLE)
+    assert (posting.title, posting.company) == ("Junior Backend Engineer", "Hooli")
+
+
+def test_paywalled_job_without_a_job_link_is_skipped():
+    assert _postings(PAYWALLED) == []
+
+
+def test_messages_pasted_together_keep_their_own_titles():
+    second = SLASH_STYLE.replace("Junior Backend Engineer", "Data Analyst").replace("/42", "/43")
+    titles = [p.title for p in _postings(SLASH_STYLE + "\n" + PAYWALLED + "\n" + second)]
+    assert titles == ["Junior Backend Engineer", "Data Analyst"]
+
+
+def test_ad_text_does_not_leak_into_the_next_job():
+    second = SLASH_STYLE.replace("/42", "/43")
+    assert "prep session" not in _postings(SLASH_STYLE + second)[1].text

@@ -108,3 +108,12 @@ def test_cli_output_matches_schema(tmp_path):
     rows = json.loads(result.stdout)
     assert len(rows) == 4
     jsonschema.validate(rows, schema["output"])
+
+
+def test_job_blocks_work_on_plain_text_without_an_export():
+    from job_blocks import extract_postings
+
+    text = "*Junior Data Analyst*\nUmbrella\nhttps://umbrella.example/jobs/7?utm_source=tg\nתודה!"
+    [posting] = extract_postings(text, group="telegram-inbox", sent_at=datetime(2026, 11, 18, 9, 0))
+    assert (posting.title, posting.key, posting.group) == (
+        "Junior Data Analyst", "https://umbrella.example/jobs/7", "telegram-inbox")

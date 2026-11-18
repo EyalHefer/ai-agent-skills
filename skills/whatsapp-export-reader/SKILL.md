@@ -18,8 +18,8 @@ Writes a JSON array to stdout. The format is defined in [schema.json](schema.jso
 ## How it works
 
 1. Splits the export into messages and skips system messages such as "X joined the group".
-2. Splits each message into job blocks. Each job ends at its link, so one message can hold several jobs.
-3. Ignores links that are not jobs: ads, group invites and app stores (`_NOISE_URL` in the script).
+2. Splits each message into job blocks (`scripts/job_blocks.py`, which knows nothing about WhatsApp exports, so other chat readers can reuse it). Each job ends at its link, so one message can hold several jobs.
+3. Ignores links that are not jobs: ads, group invites and app stores (`_NOISE_URL` in `scripts/job_blocks.py`).
 4. Removes duplicates across groups by `key`, keeping the earliest posting.
 
 ## Limitations

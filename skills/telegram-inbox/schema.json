@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "telegram-inbox",
+  "input": {
+    "type": "object",
+    "required": ["command", "inbox_dir"],
+    "properties": {
+      "command": { "enum": ["pull", "read"] },
+      "inbox_dir": { "type": "string", "description": "Folder holding inbox.jsonl" },
+      "url": { "type": "string", "description": "pull: the inbox Worker's base URL (or INBOX_URL)" },
+      "since": { "type": "string", "format": "date-time", "description": "read: only postings sent at or after this time" }
+    }
+  },
+  "pull_output": {
+    "type": "object",
+    "required": ["pulled", "saved"],
+    "properties": {
+      "pulled": { "type": "integer", "description": "Messages fetched from the Worker and deleted there" },
+      "saved": { "type": "integer", "description": "Of those, how many were new to inbox.jsonl" }
+    }
+  },
+  "output": {
+    "type": "array",
+    "description": "read: the same format as whatsapp-export-reader",
+    "items": {
+      "type": "object",
+      "required": ["key", "url", "title", "company", "text", "group", "sent_at"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "description": "Normalized URL, stable identity across sources and runs" },
+        "url": { "type": "string", "description": "The link as posted" },
+        "title": { "type": "string", "minLength": 1 },
+        "company": { "type": "string", "description": "Empty when the message does not name one" },
+        "text": { "type": "string", "description": "The message text describing this job" },
+        "group": { "const": "telegram-inbox" },
+        "sent_at": { "type": "string", "format": "date-time", "description": "From the copied WhatsApp header, else when the bot received it" }
+      }
+    }
+  }
+}

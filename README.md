@@ -19,6 +19,7 @@ Skills are run as command-line programs that write JSON to stdout, so an agent i
 | Skill | Purpose |
 |---|---|
 | [whatsapp-export-reader](skills/whatsapp-export-reader/SKILL.md) | Turns WhatsApp group exports into structured job postings |
+| [telegram-inbox](skills/telegram-inbox/SKILL.md) | Collects job posts shared by hand to a Telegram bot, in the same format |
 | [rule-filter](skills/rule-filter/SKILL.md) | Removes items from a JSON list using keyword, number and date rules |
 | [profile-matcher](skills/profile-matcher/SKILL.md) | Scores items against a profile with an LLM and ranks them |
 | [job-page-reader](skills/job-page-reader/SKILL.md) | Reads job links in a headless browser and sorts them into open and closed |

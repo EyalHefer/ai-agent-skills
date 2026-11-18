@@ -163,3 +163,50 @@ def test_messages_pasted_together_keep_their_own_titles():
 def test_ad_text_does_not_leak_into_the_next_job():
     second = SLASH_STYLE.replace("/42", "/43")
     assert "prep session" not in _postings(SLASH_STYLE + second)[1].text
+
+
+# Several messages copied at once on the phone. Senders and numbers are invented.
+COPIED = (
+    "[18.11, 12:29] @JobsBot: " + PAYWALLED
+    + "[18.11, 12:30] +1 (555) 010-0000: " + SLASH_STYLE
+    + "[18.11, 14:03] ~ Recruiter: " + SLASH_STYLE.replace("Junior Backend Engineer", "Data Analyst")
+    .replace("/42", "/43")
+)
+RECEIVED = datetime(2026, 11, 18, 15, 0)
+
+
+def test_copied_messages_are_split_with_their_send_times():
+    from job_blocks import split_copied_messages
+
+    messages = split_copied_messages(COPIED, RECEIVED)
+    assert [sent_at for sent_at, _ in messages] == [
+        datetime(2026, 11, 18, 12, 29), datetime(2026, 11, 18, 12, 30), datetime(2026, 11, 18, 14, 3)]
+    assert messages[1][1].startswith("*Junior Backend Engineer* / Hooli")
+
+
+def test_senders_and_phone_numbers_are_dropped():
+    from job_blocks import split_copied_messages
+
+    text = "\n".join(t for _, t in split_copied_messages(COPIED, RECEIVED))
+    assert "555" not in text and "JobsBot" not in text and "Recruiter" not in text
+
+
+def test_copied_jobs_are_found_in_each_message():
+    from job_blocks import split_copied_messages
+
+    titles = [p.title for sent_at, t in split_copied_messages(COPIED, RECEIVED) for p in
+              _postings(t)]
+    assert titles == ["Junior Backend Engineer", "Data Analyst"]
+
+
+def test_text_without_headers_is_one_message_at_receive_time():
+    from job_blocks import split_copied_messages
+
+    assert split_copied_messages(SLASH_STYLE, RECEIVED) == [(RECEIVED, SLASH_STYLE.strip())]
+
+
+def test_message_copied_in_january_from_december_gets_last_year():
+    from job_blocks import split_copied_messages
+
+    [(sent_at, _)] = split_copied_messages("[31.12, 23:50] X: hi", datetime(2027, 1, 2, 8, 0))
+    assert sent_at == datetime(2026, 12, 31, 23, 50)

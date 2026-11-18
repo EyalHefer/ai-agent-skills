@@ -3,11 +3,13 @@
 Every job posting ends with a link, so a message is split into job "blocks": the text between one
 job link and the next. This module knows nothing about where the text came from (a WhatsApp export,
 a message forwarded to a bot...), so any reader of chat text can use it.
+
+split_copied_messages() handles text copied from several messages at once on the phone.
 """
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _URL = re.compile(r"https?://[^\s<>\"*]+")
@@ -36,6 +38,9 @@ _TITLE_LABEL = re.compile(r"^\s*\*?שם המשרה:?\*?:?\s*(.+)$")
 _COMPANY_LABEL = re.compile(r"^\s*\*?שם החברה:?\*?:?\s*(.*)$")
 _BOLD = re.compile(r"\*([^*\n]{3,150})\*")
 
+# "[18.11, 12:29] sender: text", the header the phone adds to each of several copied messages.
+_COPIED_HEADER = re.compile(r"^[‎‏]*\[(\d{1,2})[./](\d{1,2}), (\d{1,2}):(\d{2})\] [^:\n]{1,60}: (.*)$")
+
 
 @dataclass
 class Posting:
@@ -54,6 +59,35 @@ def normalize_url(url: str) -> str:
     host = parts.netloc.lower().removeprefix("www.").removeprefix("juniors.")
     query = urlencode(sorted((k, v) for k, v in parse_qsl(parts.query) if not _TRACKING_PARAM.match(k)))
     return urlunsplit(("https", host, parts.path.rstrip("/"), query, ""))
+
+
+def split_copied_messages(text: str, received_at: datetime) -> list[tuple[datetime, str]]:
+    """Split text copied from several WhatsApp messages at once into (sent_at, text) pairs.
+
+    The phone copies them as "[18.11, 12:29] sender: text". The sender (a name or a phone number)
+    is dropped, so it is never stored. The header has no year, so it is taken from received_at.
+    Text without headers (one message copied or shared alone) is one message sent at received_at.
+    """
+    messages: list[tuple[datetime, list[str]]] = []
+    for line in text.splitlines():
+        header = _COPIED_HEADER.match(line)
+        if header:
+            day, month, hour, minute, body = header.groups()
+            messages.append((_copied_time(received_at, int(day), int(month), int(hour), int(minute)), [body]))
+        elif messages:
+            messages[-1][1].append(line)
+        else:                       # text before the first header, or no headers at all
+            messages.append((received_at, [line]))
+    return [(sent_at, "\n".join(lines).strip()) for sent_at, lines in messages if "".join(lines).strip()]
+
+
+def _copied_time(received_at: datetime, day: int, month: int, hour: int, minute: int) -> datetime:
+    try:
+        sent_at = datetime(received_at.year, month, day, hour, minute)
+    except ValueError:              # not a real date after all
+        return received_at
+    # Copied on Jan 2 from a message sent on Dec 31: it belongs to last year.
+    return sent_at.replace(year=sent_at.year - 1) if sent_at > received_at + timedelta(days=1) else sent_at
 
 
 def extract_postings(text: str, group: str, sent_at: datetime) -> list[Posting]:

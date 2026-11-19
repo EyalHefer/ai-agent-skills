@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict
@@ -24,6 +25,8 @@ from job_blocks import Posting, extract_postings, split_copied_messages  # noqa:
 INBOX_FILE = "inbox.jsonl"
 GROUP = "telegram-inbox"
 TIMEOUT_SECONDS = 20
+ATTEMPTS = 3          # some networks drop connections now and then
+RETRY_SECONDS = 1
 
 
 class InboxError(Exception):
@@ -91,14 +94,18 @@ def _call(url: str, method: str, route: str, token: str, body: dict | None = Non
         "Content-Type": "application/json",
         "User-Agent": "telegram-inbox-skill",
     })
-    try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        hint = " (check INBOX_TOKEN)" if e.code == 401 else ""
-        raise InboxError(f"{method} {route} failed: HTTP {e.code}{hint}") from None
-    except (urllib.error.URLError, TimeoutError) as e:
-        raise InboxError(f"{method} {route} failed: {getattr(e, 'reason', e)}") from None
+    # Both routes are safe to repeat: fetching changes nothing, and deleting twice deletes nothing more.
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            hint = " (check INBOX_TOKEN)" if e.code == 401 else ""
+            raise InboxError(f"{method} {route} failed: HTTP {e.code}{hint}") from None
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+            if attempt == ATTEMPTS:
+                raise InboxError(f"{method} {route} failed: {getattr(e, 'reason', e)}") from None
+            time.sleep(RETRY_SECONDS * attempt)
 
 
 def main() -> None:

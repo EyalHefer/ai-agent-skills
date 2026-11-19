@@ -13,6 +13,7 @@ SKILL = Path(__file__).resolve().parent.parent
 SCRIPT = SKILL / "scripts" / "telegram_inbox.py"
 sys.path.insert(0, str(SCRIPT.parent))
 
+import telegram_inbox  # noqa: E402
 from telegram_inbox import InboxError, pull, read  # noqa: E402
 
 TOKEN = "test-token"
@@ -30,9 +31,10 @@ COPIED = (
 class FakeWorker:
     """The inbox Worker's two agent routes, served on localhost."""
 
-    def __init__(self, messages, fail_ack=False):
+    def __init__(self, messages, fail_ack=False, drops=0):
         self.messages = list(messages)
         self.fail_ack = fail_ack
+        self.drops = drops          # connections to close without an answer, as a flaky network does
         worker = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -49,6 +51,10 @@ class FakeWorker:
                 return self.headers.get("Authorization") == f"Bearer {TOKEN}"
 
             def do_GET(self):
+                if worker.drops:
+                    worker.drops -= 1
+                    self.close_connection = True
+                    return
                 if not self._authorized():
                     return self._send(401, {})
                 self._send(200, {"messages": worker.messages})
@@ -68,6 +74,11 @@ class FakeWorker:
 
     def close(self):
         self.server.shutdown()
+
+
+@pytest.fixture(autouse=True)
+def no_retry_wait(monkeypatch):
+    monkeypatch.setattr(telegram_inbox, "RETRY_SECONDS", 0)
 
 
 @pytest.fixture
@@ -115,7 +126,13 @@ def test_wrong_token_is_reported(tmp_path, worker):
         pull(tmp_path, worker([]).url, "wrong")
 
 
-def test_unreachable_worker_is_reported(tmp_path):
+def test_dropped_connections_are_retried(tmp_path, worker):
+    w = worker([message(1, ONE_JOB)], drops=2)
+    assert pull(tmp_path, w.url, TOKEN) == {"pulled": 1, "saved": 1}
+
+
+def test_unreachable_worker_is_reported(tmp_path, monkeypatch):
+    monkeypatch.setattr(telegram_inbox, "ATTEMPTS", 1)   # Windows takes ~2s to refuse each connection
     with pytest.raises(InboxError):
         pull(tmp_path, "http://127.0.0.1:9", TOKEN)
 

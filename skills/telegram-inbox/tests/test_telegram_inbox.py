@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 import threading
+import urllib.parse
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -14,7 +15,7 @@ SCRIPT = SKILL / "scripts" / "telegram_inbox.py"
 sys.path.insert(0, str(SCRIPT.parent))
 
 import telegram_inbox  # noqa: E402
-from telegram_inbox import InboxError, pull, read  # noqa: E402
+from telegram_inbox import InboxError, download_exports, events, pull, read  # noqa: E402
 
 TOKEN = "test-token"
 NOV_18_15H = int(datetime(2026, 11, 18, 15, 0).timestamp())
@@ -29,10 +30,12 @@ COPIED = (
 
 
 class FakeWorker:
-    """The inbox Worker's two agent routes, served on localhost."""
+    """The inbox Worker's agent routes, served on localhost."""
 
-    def __init__(self, messages, fail_ack=False, drops=0):
+    def __init__(self, messages, fail_ack=False, drops=0, events=(), exports=None):
         self.messages = list(messages)
+        self.events = list(events)
+        self.exports = dict(exports or {})
         self.fail_ack = fail_ack
         self.drops = drops          # connections to close without an answer, as a flaky network does
         worker = self
@@ -45,7 +48,7 @@ class FakeWorker:
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps(body).encode())
+                self.wfile.write(body if isinstance(body, bytes) else json.dumps(body).encode())
 
             def _authorized(self):
                 return self.headers.get("Authorization") == f"Bearer {TOKEN}"
@@ -57,7 +60,16 @@ class FakeWorker:
                     return
                 if not self._authorized():
                     return self._send(401, {})
-                self._send(200, {"messages": worker.messages})
+                path = urllib.parse.urlsplit(self.path)
+                if path.path == "/exports":
+                    return self._send(200, {"exports": [{"name": n, "size": len(b)} for n, b in worker.exports.items()]})
+                if path.path == "/exports/file":
+                    name = urllib.parse.parse_qs(path.query)["name"][0]
+                    return self._send(200, worker.exports[name]) if name in worker.exports else self._send(404, {})
+                body = {"messages": worker.messages}
+                if worker.events is not None:       # None plays a Worker from before feedback existed
+                    body["events"] = worker.events
+                self._send(200, body)
 
             def do_POST(self):
                 if not self._authorized():
@@ -66,6 +78,7 @@ class FakeWorker:
                     return self._send(500, {})
                 ids = json.loads(self.rfile.read(int(self.headers["Content-Length"])))["update_ids"]
                 worker.messages = [m for m in worker.messages if m["update_id"] not in ids]
+                worker.events = [e for e in worker.events or [] if e["update_id"] not in ids]
                 self._send(200, {"deleted": len(ids)})
 
         self.server = HTTPServer(("127.0.0.1", 0), Handler)
@@ -100,7 +113,7 @@ def message(update_id, text):
 
 def test_pull_saves_messages_then_deletes_them_from_the_worker(tmp_path, worker):
     w = worker([message(1, ONE_JOB), message(2, COPIED)])
-    assert pull(tmp_path, w.url, TOKEN) == {"pulled": 2, "saved": 2}
+    assert pull(tmp_path, w.url, TOKEN) == {"pulled": 2, "saved": 2, "events": 0}
     assert w.messages == []
     assert len((tmp_path / "inbox.jsonl").read_text(encoding="utf-8").splitlines()) == 2
 
@@ -117,7 +130,7 @@ def test_failed_ack_keeps_messages_and_the_retry_does_not_duplicate(tmp_path, wo
         pull(tmp_path, w.url, TOKEN)
     assert len(w.messages) == 1                         # still on the Worker, nothing lost
     w.fail_ack = False
-    assert pull(tmp_path, w.url, TOKEN) == {"pulled": 1, "saved": 0}
+    assert pull(tmp_path, w.url, TOKEN) == {"pulled": 1, "saved": 0, "events": 0}
     assert len((tmp_path / "inbox.jsonl").read_text(encoding="utf-8").splitlines()) == 1
 
 
@@ -128,7 +141,7 @@ def test_wrong_token_is_reported(tmp_path, worker):
 
 def test_dropped_connections_are_retried(tmp_path, worker):
     w = worker([message(1, ONE_JOB)], drops=2)
-    assert pull(tmp_path, w.url, TOKEN) == {"pulled": 1, "saved": 1}
+    assert pull(tmp_path, w.url, TOKEN) == {"pulled": 1, "saved": 1, "events": 0}
 
 
 def test_unreachable_worker_is_reported(tmp_path, monkeypatch):
@@ -166,7 +179,7 @@ def test_cli_pull_and_read(tmp_path, worker):
     env = {"INBOX_URL": w.url, "INBOX_TOKEN": TOKEN, "PYTHONIOENCODING": "utf-8", "SYSTEMROOT": "C:\\Windows"}
     pulled = subprocess.run([sys.executable, str(SCRIPT), "pull", str(tmp_path)], env=env,
                             capture_output=True, encoding="utf-8", check=True)
-    assert json.loads(pulled.stdout) == {"pulled": 2, "saved": 2}
+    assert json.loads(pulled.stdout) == {"pulled": 2, "saved": 2, "events": 0}
 
     result = subprocess.run([sys.executable, str(SCRIPT), "read", str(tmp_path)],
                             capture_output=True, encoding="utf-8", check=True)
@@ -181,3 +194,52 @@ def test_cli_pull_without_settings_fails_clearly(tmp_path):
                             env={"SYSTEMROOT": "C:\\Windows"}, capture_output=True, encoding="utf-8")
     assert result.returncode != 0
     assert "INBOX_TOKEN" in result.stderr
+
+
+def button(update_id, message_id, choice):
+    return {"update_id": update_id, "type": "button", "message_id": message_id, "choice": choice, "date": NOV_18_15H}
+
+
+def test_pull_saves_feedback_events_and_acks_them(tmp_path, worker):
+    w = worker([message(1, ONE_JOB)], events=[button(3, 55, "skipped"), button(2, 55, "applied")])
+    assert pull(tmp_path, w.url, TOKEN) == {"pulled": 1, "saved": 1, "events": 2}
+    assert w.messages == [] and w.events == []
+    assert [e["choice"] for e in events(tmp_path)] == ["applied", "skipped"]   # oldest first
+
+
+def test_feedback_alone_is_pulled_too(tmp_path, worker):
+    w = worker([], events=[button(2, 55, "applied")])
+    assert pull(tmp_path, w.url, TOKEN) == {"pulled": 0, "saved": 0, "events": 1}
+
+
+def test_events_pulled_twice_are_saved_once(tmp_path, worker):
+    w = worker([], events=[button(2, 55, "applied")], fail_ack=True)
+    with pytest.raises(InboxError):
+        pull(tmp_path, w.url, TOKEN)
+    w.fail_ack = False
+    assert pull(tmp_path, w.url, TOKEN)["events"] == 0
+    assert len(events(tmp_path)) == 1
+
+
+def test_older_worker_without_events_still_works(tmp_path, worker):
+    w = worker([message(1, ONE_JOB)])
+    w.events = None
+    assert pull(tmp_path, w.url, TOKEN)["saved"] == 1
+
+
+def test_download_exports_writes_each_file_under_its_name(tmp_path, worker):
+    w = worker([], exports={"צ'אט WhatsApp עם Jobs.zip": b"PK\x03\x04", "../escape.txt": b"x"})
+    names = download_exports(tmp_path / "exports", w.url, TOKEN)
+    assert sorted(names) == ["escape.txt", "צ'אט WhatsApp עם Jobs.zip"]
+    assert (tmp_path / "exports" / "צ'אט WhatsApp עם Jobs.zip").read_bytes() == b"PK\x03\x04"
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_cli_exports_and_events(tmp_path, worker):
+    w = worker([], events=[button(2, 55, "applied")], exports={"Jobs.txt": b"hello"})
+    env = {"INBOX_URL": w.url, "INBOX_TOKEN": TOKEN, "PYTHONIOENCODING": "utf-8", "SYSTEMROOT": "C:\\Windows"}
+    run = lambda *a: subprocess.run([sys.executable, str(SCRIPT), *a], env=env, capture_output=True,
+                                    encoding="utf-8", check=True).stdout
+    assert json.loads(run("exports", str(tmp_path / "ex"))) == {"downloaded": ["Jobs.txt"]}
+    run("pull", str(tmp_path / "inbox"))
+    assert json.loads(run("events", str(tmp_path / "inbox")))[0]["choice"] == "applied"

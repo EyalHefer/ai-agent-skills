@@ -1,5 +1,5 @@
 pyyaml
-google-genai
+google-genai==2.34.0   # the version tested on the laptop; newer ones changed model names and dependencies
 httpx      # imported directly by profile-matcher; newer google-genai no longer installs it
 pydantic   # imported directly by profile-matcher
 playwright

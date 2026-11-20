@@ -61,6 +61,9 @@ class Gemini:
                     return self._client.models.generate_content(
                         model=model, contents=prompt, config=self._config).text
                 except errors.APIError as e:
+                    if e.code == 404:       # a model name Google retired or renamed: try the next one
+                        log(f"{model} not available (404)")
+                        continue
                     if e.code != 429 and e.code < 500:
                         raise
                     log(f"{model} busy ({e.code})")

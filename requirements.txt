@@ -1,3 +1,5 @@
 pyyaml
 google-genai
+httpx      # imported directly by profile-matcher; newer google-genai no longer installs it
+pydantic   # imported directly by profile-matcher
 playwright
